@@ -136,6 +136,91 @@ func TestGroupMappingAndComparison(t *testing.T) {
 		t.Fatal("false group drift", string(l), string(rr))
 	}
 }
+
+func TestCopyRecordMapsGroupsFromFreshSource(t *testing.T) {
+	for _, kind := range []string{"domains", "clients", "lists"} {
+		for _, scenario := range []string{"mapped", "missing group", "ambiguous group", "already exists", "no groups"} {
+			t.Run(kind+"/"+scenario, func(t *testing.T) {
+				source := syncRecord{Domain: "copy.example", Type: "deny", Kind: "regex", Client: "192.168.1.80", Address: "https://example.com/list", Groups: []int{3, 0}, Comment: "current source comment", Enabled: false}
+				if kind == "lists" {
+					source.Type = "block"
+				}
+				if scenario == "no groups" {
+					source.Groups = []int{}
+				}
+				writes := 0
+				a, _ := testApp(t, func(r *http.Request) (*http.Response, error) {
+					response := func(value any) (*http.Response, error) {
+						data, err := json.Marshal(value)
+						if err != nil {
+							return nil, err
+						}
+						return jsonResponse(200, string(data)), nil
+					}
+					if r.Method == "GET" {
+						if r.URL.Path == "/api/groups" {
+							groups := []map[string]any{{"id": 0, "name": "Default"}, {"id": 3, "name": "Family"}}
+							if r.URL.Host == "two.test" {
+								groups = []map[string]any{{"id": 0, "name": "Default"}, {"id": 3, "name": "Unrelated"}}
+								if scenario != "missing group" {
+									groups = append(groups, map[string]any{"id": 9, "name": "Family"})
+								}
+								if scenario == "ambiguous group" {
+									groups = append(groups, map[string]any{"id": 10, "name": "Family"})
+								}
+							}
+							return response(map[string]any{"groups": groups})
+						}
+						records := []syncRecord{}
+						if r.URL.Host == "one.test" || scenario == "already exists" {
+							records = append(records, source)
+						}
+						return response(map[string]any{kind: records})
+					}
+					writes++
+					if r.URL.Host != "two.test" || r.Method != "POST" {
+						t.Error("copy wrote to wrong target or overwrote an existing record")
+					}
+					var body struct {
+						Groups  []int
+						Comment string
+						Enabled bool
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					want := "[9 0]"
+					if scenario == "no groups" {
+						want = "[]"
+					}
+					if fmt.Sprint(body.Groups) != want || body.Comment != source.Comment || body.Enabled {
+						t.Errorf("copy changed metadata or reused numeric IDs: %+v", body)
+					}
+					return jsonResponse(201, "{}"), nil
+				})
+				// Only identity is trusted from the UI; metadata must be reread.
+				stale := source
+				stale.Groups = []int{999}
+				stale.Comment = "stale"
+				stale.Enabled = true
+				err := a.CopyRecord("1", "2", kind, stale)
+				if scenario == "missing group" || scenario == "ambiguous group" {
+					if err == nil || writes != 0 {
+						t.Fatal("unsafe mapping was applied", err, writes)
+					}
+				} else {
+					want := 1
+					if scenario == "already exists" {
+						want = 0
+					}
+					if err != nil || writes != want {
+						t.Fatal("copy failed", err, writes)
+					}
+				}
+			})
+		}
+	}
+}
 func TestUnavailableSnapshotCannotDelete(t *testing.T) {
 	writes := 0
 	a, _ := testApp(t, func(r *http.Request) (*http.Response, error) {

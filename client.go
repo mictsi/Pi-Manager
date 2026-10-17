@@ -18,25 +18,28 @@ import (
 type session struct{ url, sid string }
 
 type App struct {
-	config      *ConfigStore
-	log         *slog.Logger
-	http        *http.Client
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.Mutex
-	sessions    map[string]session
-	streams     map[string]*responseStream
-	nextStream  uint64
-	operationMu sync.Mutex
+	config     *ConfigStore
+	log        *slog.Logger
+	http       *http.Client
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	sessions   map[string]session
+	streams    map[string]*responseStream
+	nextStream uint64
+	// Exclusive operations keep server identities and configuration stable.
+	// Ordinary writes/login hold a read lock; reads remain available to monitoring.
+	operationMu sync.RWMutex
 	syncPlan    *SyncPlan
 	authLocks   map[string]*sync.Mutex
 	loggedOut   map[string]bool
 }
 
 type responseStream struct {
-	mu     sync.Mutex
-	body   io.ReadCloser
-	cancel context.CancelFunc
+	mu      sync.Mutex
+	body    io.ReadCloser
+	cancel  context.CancelFunc
+	release func()
 }
 
 type APIResponse struct {
@@ -68,6 +71,9 @@ func (a *App) Close() {
 	for _, s := range streams {
 		s.cancel()
 		s.body.Close()
+		if s.release != nil {
+			s.release()
+		}
 	}
 	a.http.CloseIdleConnections()
 }
@@ -82,9 +88,35 @@ func (a *App) server(id string) (Server, error) {
 }
 
 func (a *App) Request(id, path, method, body string, stream bool) (APIResponse, error) {
-	return a.request(id, path, method, strings.NewReader(body), "application/json", stream)
+	if method == "GET" {
+		return a.request(id, path, method, strings.NewReader(body), "application/json", stream)
+	}
+	// Reject writes during a restore rather than queueing them against restored
+	// settings or a replacement server. Concurrent ordinary writes are allowed.
+	if !a.operationMu.TryRLock() {
+		return APIResponse{}, errOperationBusy
+	}
+	release := a.operationMu.RUnlock
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	r, err := a.request(id, path, method, strings.NewReader(body), "application/json", stream)
+	if r.Stream != "" {
+		// Gravity remains a mutation until its stream ends, including in the tray.
+		a.mu.Lock()
+		if s := a.streams[r.Stream]; s != nil {
+			s.release, release = release, nil
+		}
+		a.mu.Unlock()
+	}
+	return r, err
 }
 
+var errOperationBusy = errors.New("configuration operation in progress; try again when it finishes")
+
+// request is used by operations that already hold operationMu for mutations.
 func (a *App) request(id, path, method string, body io.Reader, contentType string, stream bool) (APIResponse, error) {
 	if path == "/auth" && method == "DELETE" {
 		lock := a.authLock(id)
@@ -165,6 +197,11 @@ func (a *App) request(id, path, method string, body io.Reader, contentType strin
 	result := APIResponse{Status: r.StatusCode, ContentType: r.Header.Get("Content-Type")}
 	if stream && r.StatusCode >= 200 && r.StatusCode < 300 {
 		a.mu.Lock()
+		if a.ctx.Err() != nil {
+			a.mu.Unlock()
+			r.Body.Close()
+			return APIResponse{}, errors.New("request timed out or was cancelled")
+		}
 		a.nextStream++
 		result.Stream = fmt.Sprint(a.nextStream)
 		a.streams[result.Stream] = &responseStream{body: r.Body, cancel: cancel}
@@ -241,6 +278,9 @@ func (a *App) CancelStream(id string) {
 	if s != nil {
 		s.cancel()
 		s.body.Close()
+		if s.release != nil {
+			s.release()
+		}
 	}
 }
 
@@ -256,20 +296,61 @@ func (a *App) authLock(id string) *sync.Mutex {
 func (a *App) Login(id, password string) error {
 	return a.login(id, password, false)
 }
+
+// The desktop supplies the address shown when login was requested. An old UI
+// callback must never send its credentials to a newly configured server.
+func (a *App) LoginAtURL(id, password, expectedURL string) error {
+	if expectedURL == "" {
+		return errors.New("set this server's URL in Settings")
+	}
+	return a.loginAtURL(id, password, expectedURL, false)
+}
+
 func (a *App) login(id, password string, automatic bool) error {
+	return a.loginAtURL(id, password, "", automatic)
+}
+
+func (a *App) loginAtURL(id, password, expectedURL string, automatic bool) error {
+	if !a.operationMu.TryRLock() {
+		return errOperationBusy
+	}
+	defer a.operationMu.RUnlock()
 	lock := a.authLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	s, err := a.server(id)
+	if err != nil {
+		return err
+	}
+	if expectedURL != "" {
+		expected, err := normalizeConfig(Config{Servers: []Server{{ID: id, URL: expectedURL}}})
+		if err != nil || expected.Servers[0].URL != s.URL {
+			return errors.New("server configuration changed; log in again from Settings")
+		}
+	}
 	a.mu.Lock()
 	if automatic && a.loggedOut[id] {
 		a.mu.Unlock()
 		return errors.New("server explicitly logged out")
 	}
+	if automatic {
+		if sess := a.sessions[id]; sess.url == s.URL && sess.sid != "" {
+			a.mu.Unlock()
+			return nil
+		}
+		// Read saved credentials only after locking; the monitor's earlier sample
+		// may predate a manual login or a server configuration change.
+		password = s.Password
+		if password == "" {
+			a.mu.Unlock()
+			return errors.New("no saved password; log in from Settings")
+		}
+	}
 	delete(a.loggedOut, id)
 	delete(a.sessions, id)
 	a.mu.Unlock()
 	b, _ := json.Marshal(map[string]string{"password": password})
-	r, err := a.Request(id, "/auth", "POST", string(b), false)
+	r, err := a.request(id, "/auth", "POST", strings.NewReader(string(b)), "application/json", false)
 	if err != nil {
 		return err
 	}

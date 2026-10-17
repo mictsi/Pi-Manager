@@ -21,7 +21,7 @@ fi
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 go_bin="${GO:-go}"
 if ! command -v "$go_bin" >/dev/null 2>&1; then
-    echo "Go not found. Install Go 1.23 or newer, or set GO to its executable path." >&2
+    echo "Go not found. Install Go 1.25 or newer, or set GO to its executable path." >&2
     exit 1
 fi
 # Resolve the destination before changing directory so custom relative paths

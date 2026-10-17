@@ -22,6 +22,8 @@ function textHTML(key, values) { return escapeHtml(t(key, values)); }
 function setHTML(element, html) { if (element && element.innerHTML !== html) element.innerHTML = html; }
 function humanError(error) {
     const message = String(error?.message || error);
+    if (message.includes("configuration operation in progress")) return t("operationBusy");
+    if (message.includes("server configuration changed")) return t("serverChanged");
     if (/^HTTP 403:/.test(message) && (message.includes("webserver.api.app_sudo") || message.includes("Unable to export configuration"))) return t("appSudoDenied");
     if (message.includes("cannot reach Pi-hole")) return t("networkError");
     if (message.includes("session expired") || error?.status === 401) return t("sessionExpired");
@@ -53,14 +55,18 @@ async function api(server, path, {method="GET", body} = {}) {
     return data;
 }
 async function login(server, password) {
+    const previousPassword = server.password || "";
     server.checking = true; renderPills();
+    state.page?.drawHealth?.();
     try {
-        await nativeLogin(server.id, password);
+        await nativeLogin(server.id, password, server.url);
+        if (serverById(server.id) !== server) return;
         server.password = password; server.connected = true; server.error = "";
         const configured = desktopConfig.servers.find(s => s.id === server.id);
         if (configured) configured.password = password;
+        state.page?.updatePassword?.(server, previousPassword);
     } catch (error) { server.connected = false; server.error = humanError(error); throw error; }
-    finally { server.checking = false; renderPills(); }
+    finally { server.checking = false; renderPills(); state.page?.drawHealth?.(); }
 }
 let hostHealth = new Map(), trayInfo = {available:false,reason:""};
 function healthText(h) {
@@ -641,7 +647,7 @@ function recordCreateRequest(kind, item) {
 }
 function recordToggleRequest(kind, item, enabled) {
     const body = {enabled,comment:item.comment || "",groups:item.groups || [0],type:item.type};
-    if (kind === "domains") return {path:`/domains/${item.type}/${encodeURIComponent(item.domain)}`,method:"PUT",body:{...body,kind:item.kind}};
+    if (kind === "domains") return {path:recordDeletePath(kind,item),method:"PUT",body:{...body,kind:item.kind}};
     return {path:"/lists/"+encodeURIComponent(item.address)+"?type="+encodeURIComponent(item.type),method:"PUT",body};
 }
 function validIPAddress(value) {
@@ -695,7 +701,7 @@ async function renderRecords(container, page, kind) {
         merged = new Map();
         for (const [id,items] of byServer) for (const item of items) {
             const key = recordKey(kind,item);
-            if (!merged.has(key)) merged.set(key,{key,item,byServer:new Map()});
+            if (!merged.has(key)) merged.set(key,{key,item,sourceId:id,byServer:new Map()});
             merged.get(key).byServer.set(id,item);
         }
         for (const key of selected) if (!merged.has(key)) selected.delete(key);
@@ -778,7 +784,9 @@ async function renderRecords(container, page, kind) {
                     if (action === "delete" && existing) await execute(server,()=>api(server,recordDeletePath(kind,existing),{method:"DELETE"}));
                     else if ((action === "enable" || action === "disable") && existing) await execute(server,()=>sendRecordRequest(server,recordToggleRequest(kind,existing,action === "enable")));
                     else if ((action === "copy" || action === "sync") && source) {
-                        if (!existing) await execute(server,()=>sendRecordRequest(server,recordCreateRequest(kind,source)));
+                        if (!existing) await execute(server,()=>kind === "hosts"
+                            ? sendRecordRequest(server,recordCreateRequest(kind,source))
+                            : nativeCopyRecord(sourceId || row.sourceId,server.id,kind,source));
                         else if (kind === "hosts" && existing.ip !== source.ip) {
                             if (action === "sync" && window.confirm(t("dnsReplaceConfirm",{server:server.label}))) await execute(server,()=>replaceDNS(server,existing,source));
                             else conflict();
@@ -1064,9 +1072,19 @@ function renderRestore(container,page) {
 }
 async function renderSettings(container, page) {
     let rows=desktopConfig.servers.map(s=>({...s}));
+    let saving=false;
     container.innerHTML=`<div class="card"><h2>${textHTML("serverSettings")}</h2><p class="sub">${textHTML("urlHelp")}</p><p class="sub">${textHTML("passwordHelp")}</p>
         <p class="sub">${textHTML("roleHelp")}</p><form id="desktopSettings"><div id="desktopServers"></div><div class="toolbar"><button class="btn" type="button" id="desktopAdd">${textHTML("addServer")}</button><button class="btn primary" type="submit">${textHTML("save")}</button><span class="status-line" data-settings-status></span></div></form><p class="sub">${textHTML("logsHelp")}</p></div>`;
     const area=$("#desktopServers",container);
+    page.updatePassword=(server,previousPassword)=>{
+        if(!page.active)return;
+        const row=$(`[data-server="${server.id}"]`,area),draft=rows.find(s=>s.id === server.id);
+        if(!row || !draft)return;
+        const input=$("[data-password]",row);
+        // Preserve deliberate unsaved address/password edits in the form.
+        if($("[data-url]",row).value.trim() !== server.url || input.value !== previousPassword)return;
+        draft.password=server.password;input.value=server.password;
+    };
     function readRows() {
         for (const row of $$("[data-server]",area)) {
             const server=rows.find(s=>s.id === row.dataset.server);
@@ -1101,7 +1119,8 @@ async function renderSettings(container, page) {
         if (id) rows.push({id,label:"Pi-hole "+id,url:"",password:"",role:"secondary"});draw();
     };
     $("#desktopSettings",container).onsubmit=async event=>{
-        event.preventDefault();if(restoreState.running)return;readRows();
+        event.preventDefault();if(restoreState.running || saving || state.servers.some(s=>s.checking))return;readRows();
+        saving=true;
         const button=$("button[type=submit]",container);button.disabled=true;
         const status=$("[data-settings-status]",container);status.textContent=t("connecting");
         try {
@@ -1116,7 +1135,7 @@ async function renderSettings(container, page) {
             if (page.active) {status.textContent=t("saved");toast(t("saved"),"ok");}
             renderPills();page.drawHealth?.();
         } catch (error) {if (page.active) status.textContent=t("saveError");showError(error);}
-        finally {button.disabled=false;}
+        finally {saving=false;page.drawHealth?.();}
     };
     const exitSettings=document.createElement("div");exitSettings.className="card";container.append(exitSettings);
     exitSettings.innerHTML=`<h2>${textHTML("exitBehavior")}</h2><p class="sub">${textHTML("exitBehaviorHelp")}</p>${field("exitBehavior",`<select data-exit-behavior><option value="ask">${textHTML("exitAsk")}</option><option value="exit">${textHTML("exitAlways")}</option><option value="cancel">${textHTML("exitNever")}</option></select>`)}`;
@@ -1138,7 +1157,7 @@ async function renderSettings(container, page) {
     page.drawHealth=()=>{
         if(!page.active)return;
         drawRestore();
-        $("#desktopSettings button[type=submit]",container).disabled=restoreState.running;
+        $("#desktopSettings button[type=submit]",container).disabled=restoreState.running || saving || state.servers.some(s=>s.checking);
         $("[data-backup-all]",backups).disabled=restoreState.running || !state.servers.some(s=>s.url && s.connected && !(backupState.servers.get(s.id)?.url === s.url && backupState.servers.get(s.id)?.running));
         $("[data-backup-config]",backups).disabled=restoreState.running || !!backupState.config?.running;
         const configStatus=$("[data-config-backup-status]",backups);configStatus.textContent=backupStatus(backupState.config);configStatus.classList.toggle("backup-error",!!backupState.config?.error);

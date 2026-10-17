@@ -52,7 +52,7 @@ func newDesktop(a *App) (webview.WebView, error) {
 		fn   any
 	}{
 		{"nativeRequest", a.Request},
-		{"nativeLogin", a.Login},
+		{"nativeLogin", a.LoginAtURL},
 		{"nativeReadStream", a.ReadStream},
 		{"nativeCancelStream", a.CancelStream},
 		{"nativeSaveServers", a.SaveServers},
@@ -62,6 +62,7 @@ func newDesktop(a *App) (webview.WebView, error) {
 		{"nativeRestoreConfig", a.RestoreConfig},
 		{"nativePreviewSync", a.PreviewSync},
 		{"nativeApplySync", a.ApplySync},
+		{"nativeCopyRecord", a.CopyRecord},
 		{"nativeMonitor", monitor.Get},
 		{"nativePreference", a.config.SetPreference},
 		{"nativeUIError", func() { a.log.Warn("desktop JavaScript error; inspect the dashboard for details") }},

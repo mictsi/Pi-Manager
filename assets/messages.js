@@ -152,6 +152,8 @@ const MESSAGES = {
     timeout: ["Request timed out or was cancelled.", "Kaldet fik timeout eller blev annulleret.", "Το αίτημα έληξε ή ακυρώθηκε.", "Begäran tog för lång tid eller avbröts."],
     saveError: ["Could not save configuration", "Kunne ikke gemme konfiguration", "Αδυναμία αποθήκευσης ρυθμίσεων", "Kunde inte spara inställningarna"],
     serverError: ["Server error: {message}", "Serverfejl: {message}", "Σφάλμα διακομιστή: {message}", "Serverfel: {message}"],
+    operationBusy: ["A configuration operation is in progress. Try again when it finishes.", "En konfigurationsændring er i gang. Prøv igen, når den er færdig.", "Μια εργασία ρύθμισης παραμέτρων βρίσκεται σε εξέλιξη. Δοκιμάστε ξανά όταν ολοκληρωθεί.", "En konfigurationsåtgärd pågår. Försök igen när den är klar."],
+    serverChanged: ["The server configuration changed. Log in again from Settings.", "Serverkonfigurationen er ændret. Log ind igen fra Indstillinger.", "Η διαμόρφωση του διακομιστή άλλαξε. Συνδεθείτε ξανά από τις Ρυθμίσεις.", "Serverkonfigurationen har ändrats. Logga in igen från Inställningar."],
     refresh: ["Refresh", "Opdater", "Ανανέωση", "Uppdatera"],
     refreshRate: ["Refresh interval", "Opdateringsinterval", "Διάστημα ανανέωσης", "Uppdateringsintervall"],
     realtime: ["Real time (0.5 s)", "Realtid (0,5 s)", "Σε πραγματικό χρόνο (0,5 δ.)", "Realtid (0,5 s)"],

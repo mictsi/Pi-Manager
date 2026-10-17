@@ -62,6 +62,7 @@ type SyncResult struct {
 }
 
 // jsonAPI also rejects per-item failures returned with an HTTP 200 response.
+// Mutating callers must already hold operationMu for the complete operation.
 func (a *App) jsonAPI(id, path, method string, body any, out any) error {
 	data := ""
 	if body != nil {
@@ -71,7 +72,7 @@ func (a *App) jsonAPI(id, path, method string, body any, out any) error {
 		}
 		data = string(b)
 	}
-	r, err := a.Request(id, path, method, data, false)
+	r, err := a.request(id, path, method, strings.NewReader(data), "application/json", false)
 	if err != nil {
 		return err
 	}
@@ -258,6 +259,39 @@ func mappedRecord(r syncRecord, from, to map[int]string) (syncRecord, error) {
 		r.Groups[i] = found
 	}
 	return r, nil
+}
+
+// CopyRecord uses fresh server records and maps group names exactly as drift
+// sync does. Numeric IDs from a different server are never sent directly.
+func (a *App) CopyRecord(sourceID, targetID, kind string, identity syncRecord) error {
+	if sourceID == targetID || (kind != "domains" && kind != "clients" && kind != "lists") {
+		return errors.New("choose different servers and a supported record type")
+	}
+	if !a.operationMu.TryLock() {
+		return errOperationBusy
+	}
+	defer a.operationMu.Unlock()
+	source := a.snapshot(sourceID, []string{kind})
+	if problem := source.Errors[kind]; problem != "" {
+		return errors.New(problem)
+	}
+	target := a.snapshot(targetID, []string{kind})
+	if problem := target.Errors[kind]; problem != "" {
+		return errors.New(problem)
+	}
+	key := recordIdentity(kind, identity)
+	record, ok := source.Records[kind][key]
+	if !ok {
+		return errors.New("source record changed or was removed; refresh and try again")
+	}
+	if _, exists := target.Records[kind][key]; exists {
+		return nil
+	}
+	mapped, err := mappedRecord(record, source.Groups, target.Groups)
+	if err != nil {
+		return err
+	}
+	return a.writeSyncRecord(targetID, kind, nil, &mapped)
 }
 
 func dnsNames(r syncRecord) []string {

@@ -2,7 +2,7 @@
 (() => {
     // The native wrapper rejects with JSON strings; give the dashboard the
     // Error objects its existing error handlers expect.
-    for (const name of ["nativeRequest", "nativeLogin", "nativeReadStream", "nativeCancelStream", "nativeSaveServers", "nativeBackupServer", "nativeBackupConfig", "nativeRestoreServer", "nativeRestoreConfig", "nativePreference", "nativeUIError", "nativePreviewSync", "nativeApplySync", "nativeMonitor", "nativeTrayStatus", "nativeExitReady", "nativeExitDecision"]) {
+    for (const name of ["nativeRequest", "nativeLogin", "nativeReadStream", "nativeCancelStream", "nativeSaveServers", "nativeBackupServer", "nativeBackupConfig", "nativeRestoreServer", "nativeRestoreConfig", "nativePreference", "nativeUIError", "nativePreviewSync", "nativeApplySync", "nativeCopyRecord", "nativeMonitor", "nativeTrayStatus", "nativeExitReady", "nativeExitDecision"]) {
         const invoke = window[name];
         window[name] = async (...args) => {
             try { return await invoke(...args); }

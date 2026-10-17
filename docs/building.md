@@ -2,7 +2,7 @@
 
 [Documentation](../README.md#documentation)
 
-Install **Go 1.23 or newer**; a current stable release is recommended. A C
+Install **Go 1.25 or newer**; a current stable release is recommended. A C
 compiler and Node.js are not required. Desktop runtimes are needed to run the
 app, even though release compilation uses `CGO_ENABLED=0`.
 

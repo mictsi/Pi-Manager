@@ -50,6 +50,9 @@ func TestNativeDesktop(t *testing.T) {
 	if err := w.Bind("smokeRestoreZIP", func() string { return base64.StdEncoding.EncodeToString(testBackupZIP(t)) }); err != nil {
 		t.Fatal(err)
 	}
+	if err := w.Bind("smokeConfig", a.config.Get); err != nil {
+		t.Fatal(err)
+	}
 	if err := w.Bind("smokeBackupDenied", func(string) (BackupResult, error) {
 		return BackupResult{}, responseError(APIResponse{Status: 403, Body: `{"error":{"message":"Unable to export configuration","hint":"The current app session is not allowed to export Pi-hole config settings (webserver.api.app_sudo is false)"}}`})
 	}); err != nil {
@@ -411,6 +414,28 @@ func TestNativeDesktop(t *testing.T) {
                     if(kind === "domains")assert(document.querySelector("[data-record-sync-errors]").textContent.includes("simulated partial failure"),"Resource sync concealed a partial failure");
                     if(kind === "hosts")assert(secondary.find(item=>item.name==="nas.home").ip==="192.168.1.3","Resource sync did not replace changed DNS values");
                 }
+                const originalCopy=window.nativeCopyRecord,copyCalls=[];
+                window.nativeCopyRecord=(...args)=>{copyCalls.push(args.slice(0,3));return originalCopy(...args)};
+                for(const kind of ["domains","clients","lists"]) {
+                    for(const mode of ["row","bulk"]) {
+                        const item={domain:"copy-"+mode+".example",type:kind==="lists" ? "block" : "deny",kind:"exact",client:mode==="row" ? "192.168.1.91" : "192.168.1.92",address:"https://example.com/copy-"+mode,comment:"source two",groups:[3],enabled:false};
+                        await sendRecordRequest(serverById("2"),recordCreateRequest(kind,item));
+                        await switchTab(kind);
+                        const filter=document.querySelector("[data-record-filter]");filter.value="";filter.dispatchEvent(new Event("input"));
+                        const row=[...document.querySelectorAll("tbody tr[data-key]")].find(row=>row.dataset.key===recordKey(kind,item));
+                        assert(row,"Copy source row missing");
+                        if(mode==="row")row.querySelector('[data-record-server="1"] [data-action="copy"]').click();
+                        else {
+                            for(const target of document.querySelectorAll("[data-target]")){target.checked=target.dataset.target==="1";target.dispatchEvent(new Event("change"));}
+                            row.querySelector("[data-select]").click();document.querySelector('[data-bulk="copy"]').click();
+                        }
+                        await wait(()=>!document.querySelector("[data-refresh-records]").disabled);
+                        const copied=recordItems(kind,await api(serverById("1"),RECORD_PATHS[kind])).find(value=>recordKey(kind,value)===recordKey(kind,item));
+                        assert(copied && copied.comment==="source two" && copied.groups[0]===3,"Copy lost source identity or metadata: "+kind+"/"+mode);
+                    }
+                }
+                assert(copyCalls.length===6 && copyCalls.every(args=>args[0]==="2" && args[1]==="1"),"Row/bulk copy bypassed native group mapping or selected the wrong source");
+                window.nativeCopyRecord=originalCopy;
                 await switchTab("gravity");
                 document.getElementById("gravBtn1").click();
                 await wait(()=>document.getElementById("gravLog1").textContent.includes("Gravity complete ✓"));
@@ -455,10 +480,20 @@ func TestNativeDesktop(t *testing.T) {
                 }
                 document.querySelector("[data-open-settings]").click();
                 await wait(()=>state.activeTab==="settings" && document.activeElement.matches('[data-server="1"] [data-password]'));
-                const savedLogin=document.querySelector('[data-loginform="1"] input');savedLogin.value="saved-one";
-                state.page.drawHealth();assert(document.querySelector('[data-loginform="1"] input')===savedLogin && savedLogin.value==="saved-one","Health refresh reset a typed password");
+                const savedLogin=document.querySelector('[data-loginform="1"] input');savedLogin.value="updated-one";
+                state.page.drawHealth();assert(document.querySelector('[data-loginform="1"] input')===savedLogin && savedLogin.value==="updated-one","Health refresh reset a typed password");
                 document.querySelector('[data-loginform="1"]').requestSubmit();
                 await wait(()=>state.servers[0].connected && document.querySelector('[data-settings-logout="1"]'));
+                assert(document.querySelector('[data-server="1"] [data-password]').value==="updated-one","Manual login left the settings password stale");
+                document.getElementById("desktopSettings").requestSubmit();
+                await wait(()=>!document.querySelector('#desktopSettings button[type="submit"]').disabled);
+                assert((await smokeConfig()).servers[0].password==="updated-one","Saving Settings erased the successful login password");
+                document.querySelector('[data-server="1"] [data-password]').value="saved-one";
+                await login(serverById("1"),"newer-one");
+                assert(document.querySelector('[data-server="1"] [data-password]').value==="saved-one","Login overwrote an intentional unsaved password edit");
+                document.getElementById("desktopSettings").requestSubmit();
+                await wait(()=>!document.querySelector('#desktopSettings button[type="submit"]').disabled);
+                assert((await smokeConfig()).servers[0].password==="saved-one","Saving an intentional password edit failed");
                 await switchTab("dashboard");
                 assert(!document.querySelector("[data-setup-notice]"),"Successful Settings login left a stale setup notice");
                 await switchTab("settings");

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-var version = "0.2.5"
+var version = "0.2.6"
 
 //go:embed assets/THIRD_PARTY.txt
 var thirdPartyNotices string

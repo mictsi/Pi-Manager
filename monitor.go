@@ -80,7 +80,7 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 			}
 			m.retryMu.Unlock()
 			if sess.sid == "" && retry {
-				if e = m.app.login(id, s.Password, true); e == nil {
+				if e = m.app.login(id, "", true); e == nil {
 					err = m.app.jsonAPI(id, "/dns/blocking", "GET", nil, &blocking)
 				}
 			}

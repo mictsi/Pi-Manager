@@ -275,7 +275,7 @@ ebitengine/purego v0.10.1 — https://github.com/ebitengine/purego
    limitations under the License.
 
 
-golang.org/x/sys v0.31.0 — https://go.googlesource.com/sys
+golang.org/x/sys v0.44.0 — https://go.googlesource.com/sys
 ==========================================================
 
 Copyright 2009 The Go Authors.

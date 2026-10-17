@@ -172,14 +172,16 @@ func desktopTestApp(t *testing.T) *App {
 				return response(201, map[string]any{kind: items}), nil
 			}
 			identity := strings.TrimPrefix(path, root+"/")
+			if kind == "domains" {
+				parts := strings.SplitN(identity, "/", 3)
+				if len(parts) != 3 || (parts[0] != "allow" && parts[0] != "deny") || (parts[1] != "exact" && parts[1] != "regex") || parts[2] == "" {
+					return jsonResponse(400, `{"error":{"message":"domain type, kind and value are required"}}`), nil
+				}
+			}
 			for i, item := range items {
 				match := false
 				if kind == "domains" {
-					if r.Method == "DELETE" {
-						match = identity == fmt.Sprint(item["type"])+"/"+fmt.Sprint(item["kind"])+"/"+fmt.Sprint(item["domain"])
-					} else {
-						match = identity == fmt.Sprint(item["type"])+"/"+fmt.Sprint(item["domain"]) || identity == fmt.Sprint(item["type"])+"/"+fmt.Sprint(item["kind"])+"/"+fmt.Sprint(item["domain"])
-					}
+					match = identity == fmt.Sprint(item["type"])+"/"+fmt.Sprint(item["kind"])+"/"+fmt.Sprint(item["domain"])
 				} else if kind == "lists" {
 					match = identity == item["address"] && r.URL.Query().Get("type") == item["type"]
 				} else {
