@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleName</key><string>Pi-Manager</string>
+    <key>CFBundleDisplayName</key><string>Pi-Manager</string>
+    <key>CFBundleIdentifier</key><string>io.pimanager.desktop</string>
+    <key>CFBundleExecutable</key><string>pi-manager</string>
+    <key>CFBundleIconFile</key><string>icon.icns</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+    <key>CFBundleVersion</key><string>@VERSION@</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict></plist>

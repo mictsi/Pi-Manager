@@ -1,0 +1,19 @@
+{
+  "servers": [
+    {
+      "id": "1",
+      "label": "Pi-hole 1",
+      "url": "http://192.168.1.2/api",
+      "password": "",
+      "role": "main"
+    },
+    {
+      "id": "2",
+      "label": "Pi-hole 2",
+      "url": "http://192.168.1.3/api",
+      "password": "",
+      "role": "secondary"
+    }
+  ],
+  "preferences": {}
+}

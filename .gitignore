@@ -1,0 +1,5 @@
+/bin/
+/dist/
+/config.json
+/.config-*.json
+/pi-manager.log*
