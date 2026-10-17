@@ -47,6 +47,20 @@ header.topbar { padding:12px 16px; }
 .resource-sync .btn,.gravity-actions .btn { max-width:100%; white-space:normal; text-align:left; }
 .resource-sync .toolbar,.gravity-actions .toolbar { margin-bottom:0; }
 .sync-errors { white-space:pre-line; overflow-wrap:anywhere; }
+.health-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.backup-result { font-size:12px; line-height:1.6; color:var(--muted); overflow-wrap:anywhere; }
+.backup-result.backup-error { color:var(--red); }
+.restore-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); gap:20px; }
+.restore-grid form,.restore-grid fieldset { min-width:0; }
+.restore-grid fieldset { height:100%; box-sizing:border-box; border:1px solid var(--border); border-radius:10px; padding:16px; }
+.restore-grid legend { padding:0 8px; font-weight:600; }
+.restore-grid .field { margin:12px 0; }
+.restore-grid input[type=file],.restore-grid select { width:100%; min-width:0; max-width:100%; box-sizing:border-box; }
+.restore-sections { display:flex; flex-wrap:wrap; gap:10px 20px; margin:16px 0; }
+.restore-sections label { display:flex; align-items:center; gap:6px; font-size:12px; }
+.restore-sections input { flex:none; }
+.restore-grid button { white-space:normal; }
+.backup-settings .btn { max-width:100%; white-space:normal; }
 .count-note { font-size:12px; color:var(--muted); }
 .pager { display:flex; gap:10px; justify-content:flex-end; align-items:center; padding-top:10px; }
 .log { white-space:pre-wrap; overflow:auto; max-height:60vh; }

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-var version = "0.2.2"
+var version = "0.2.3"
 
 //go:embed assets/THIRD_PARTY.txt
 var thirdPartyNotices string
@@ -44,6 +44,15 @@ func run() error {
 	if started {
 		return nil
 	}
+	instance, err := acquireSingleInstance()
+	if err != nil {
+		return fmt.Errorf("cannot acquire application instance lock: %w", err)
+	}
+	if instance == nil {
+		// Another desktop instance, including one minimized to tray, owns the lock.
+		return nil
+	}
+	defer instance.Close()
 	dir, err := executableDir()
 	if err != nil {
 		return err

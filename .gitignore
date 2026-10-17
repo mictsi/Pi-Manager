@@ -1,5 +1,6 @@
 /bin/
 /dist/
+/backups/
 /config.json
 /.config-*.json
 /pi-manager.log*

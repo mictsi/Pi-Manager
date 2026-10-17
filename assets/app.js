@@ -948,6 +948,103 @@ async function renderDrift(container,page) {
     draw();
 }
 
+const backupState={servers:new Map(),config:null};
+function notifyBackup() { document.dispatchEvent(new Event("backup-progress")); }
+async function backupServer(server) {
+    if(!server || !server.url || !server.connected)return;
+    const previous=backupState.servers.get(server.id);
+    if(previous?.running && previous.url === server.url)return;
+    const value={url:server.url,running:true};backupState.servers.set(server.id,value);notifyBackup();
+    try {Object.assign(value,await nativeBackupServer(server.id));toast(server.label+": "+t("backupSaved",{path:value.path}),"ok");}
+    catch(error) {
+        value.error=humanError(error);
+        if(String(error.message || error).includes("session expired") && serverById(server.id)?.url === server.url){serverById(server.id).connected=false;renderPills();}
+    }
+    finally {value.running=false;notifyBackup();}
+}
+async function backupAppConfig() {
+    if(backupState.config?.running)return;
+    const value=backupState.config={running:true};notifyBackup();
+    try {Object.assign(value,await nativeBackupConfig());toast(t("backupSaved",{path:value.path}),"ok");}
+    catch(error){value.error=humanError(error);}
+    finally {value.running=false;notifyBackup();}
+}
+function backupStatus(value) {
+    return value?.running ? t("backupRunning") : value?.error ? t("backupError",{message:value.error}) : value?.path ? t("backupSaved",{path:value.path}) : t("backupIdle");
+}
+const restoreState={running:false,result:"",error:""};
+const RESTORE_SECTIONS=["config","dhcp_leases","groups","domains","lists","clients"];
+function fileAsBase64(file) {
+    return new Promise((resolve,reject)=>{
+        const reader=new FileReader();
+        reader.onload=()=>resolve(String(reader.result).split(",")[1]);
+        reader.onerror=()=>reject(new Error(t("restoreReadError")));
+        reader.onabort=()=>reject(new Error(t("restoreReadError")));
+        reader.readAsDataURL(file);
+    });
+}
+async function performRestore(file,server,options) {
+    if(restoreState.running)return;
+    if(!file || file.size>(server ? 49*1024*1024 : 2*1024*1024)){showError(new Error(t("restoreFileLimit")));return;}
+    if(server && (!server.connected || !RESTORE_SECTIONS.some(key=>options[key])))return;
+    const target=server ? server.label+" ("+server.url+")" : t("restoreAppTarget");
+    const sections=server ? RESTORE_SECTIONS.filter(key=>options[key]).map(key=>t("restoreSection_"+key)).join(", ") : t("restoreAppTarget");
+    if(!confirm(t("restoreConfirm",{file:file.name,target,sections})))return;
+    Object.assign(restoreState,{running:true,result:"",error:""});notifyBackup();
+    try {
+        let result;
+        if(server) {
+            result=await nativeRestoreServer(server.id,await fileAsBase64(file),options);
+            if(serverById(server.id)?.url===server.url){serverById(server.id).connected=false;hostHealth.delete(server.id);}
+        } else {
+            result=await restoreAppSettings(await file.text());
+            desktopConfig.servers=result.config.servers;desktopConfig.preferences=result.config.preferences;
+            state.servers=result.config.servers.map(s=>({...s,connected:false,checking:false}));
+            hostHealth.clear();backupState.servers.clear();backupState.config=null;
+            currentLanguage=localStorage.getItem("ph_combo_language") || "en";
+            if(!UI_LANGUAGES.includes(currentLanguage))currentLanguage="en";
+            await switchTab("settings");
+        }
+        restoreState.result=t(server ? "restoreServerDone" : "restoreConfigDone",{target,path:result.safetyBackup.path});
+        renderPills();toast(restoreState.result,"ok");
+    } catch(error) {
+        restoreState.error=humanError(error);
+        if(server && String(error.message || error).includes("session expired") && serverById(server.id)?.url===server.url){serverById(server.id).connected=false;renderPills();}
+    }
+    finally {restoreState.running=false;notifyBackup();}
+}
+function renderRestore(container,page) {
+    const card=document.createElement("div");card.className="card restore-settings";container.append(card);
+    card.innerHTML=`<h2>${textHTML("restore")}</h2><p class="sub">${textHTML("restoreHelp")}</p><div class="restore-grid">
+        <form data-restore-server-form><fieldset><legend>${textHTML("restoreServer")}</legend>
+        ${field("restoreTarget",'<select data-restore-target required></select>')}
+        ${field("restoreZIP",'<input type="file" accept=".zip,application/zip" data-restore-zip required>')}
+        <div class="restore-sections">${RESTORE_SECTIONS.map(key=>`<label><input type="checkbox" data-restore-section="${key}" ${key==="config" || key==="dhcp_leases" ? "" : "checked"}> ${textHTML("restoreSection_"+key)}</label>`).join("")}</div>
+        <p class="sub">${textHTML("restoreSectionsHelp")}</p><button class="btn" data-restore-server type="submit">${textHTML("restoreServer")}</button></fieldset></form>
+        <form data-restore-config-form><fieldset><legend>${textHTML("restoreConfig")}</legend>
+        ${field("restoreJSON",'<input type="file" accept=".json,application/json" data-restore-json required>')}
+        <p class="sub">${textHTML("restoreConfigHelp")}</p><button class="btn" data-restore-config type="submit">${textHTML("restoreConfig")}</button></fieldset></form>
+        </div><p class="backup-result" data-restore-status role="status"></p>`;
+    const target=$("[data-restore-target]",card);
+    const update=()=>{
+        if(!page.active)return;
+        const chosen=target.value;
+        setHTML(target,state.servers.filter(s=>s.url).map(s=>`<option value="${s.id}">${escapeHtml(s.label+" · "+s.url)}</option>`).join(""));
+        if(serverById(chosen)?.url)target.value=chosen;
+        $("[data-restore-server]",card).disabled=restoreState.running || !serverById(target.value)?.connected || ! $$("[data-restore-section]:checked",card).length;
+        $("[data-restore-config]",card).disabled=restoreState.running;
+        for(const control of $$("input,select",card))control.disabled=restoreState.running;
+        const status=$("[data-restore-status]",card);status.textContent=restoreState.running ? t("restoreRunning") : restoreState.error || restoreState.result;
+        status.classList.toggle("backup-error",!!restoreState.error);
+    };
+    card.onchange=update;
+    $("[data-restore-server-form]",card).onsubmit=event=>{
+        event.preventDefault();if(!serverById(target.value))return;const options=Object.fromEntries($$("[data-restore-section]",card).map(input=>[input.dataset.restoreSection,input.checked]));
+        return performRestore($("[data-restore-zip]",card).files[0],serverById(target.value),options);
+    };
+    $("[data-restore-config-form]",card).onsubmit=event=>{event.preventDefault();return performRestore($("[data-restore-json]",card).files[0],null,null);};
+    return update;
+}
 async function renderSettings(container, page) {
     let rows=desktopConfig.servers.map(s=>({...s}));
     container.innerHTML=`<div class="card"><h2>${textHTML("serverSettings")}</h2><p class="sub">${textHTML("urlHelp")}</p><p class="sub">${textHTML("passwordHelp")}</p>
@@ -987,7 +1084,7 @@ async function renderSettings(container, page) {
         if (id) rows.push({id,label:"Pi-hole "+id,url:"",password:"",role:"secondary"});draw();
     };
     $("#desktopSettings",container).onsubmit=async event=>{
-        event.preventDefault();readRows();
+        event.preventDefault();if(restoreState.running)return;readRows();
         const button=$("button[type=submit]",container);button.disabled=true;
         const status=$("[data-settings-status]",container);status.textContent=t("connecting");
         try {
@@ -1004,25 +1101,42 @@ async function renderSettings(container, page) {
         } catch (error) {if (page.active) status.textContent=t("saveError");showError(error);}
         finally {button.disabled=false;}
     };
+    const backups=document.createElement("div");backups.className="card backup-settings";container.append(backups);
+    backups.innerHTML=`<h2>${textHTML("backups")}</h2><p class="sub">${textHTML("backupHelp")}</p><div class="toolbar"><button class="btn primary" data-backup-all>${textHTML("backupAll")}</button><button class="btn" data-backup-config>${textHTML("backupConfig")}</button></div><p class="sub">${textHTML("backupLoginHelp")}</p><p class="backup-result" role="status" data-config-backup-status></p>`;
+    $("[data-backup-all]",backups).onclick=()=>Promise.all(state.servers.filter(s=>s.url && s.connected).map(backupServer));
+    $("[data-backup-config]",backups).onclick=backupAppConfig;
+    const drawRestore=renderRestore(container,page);
     const health=document.createElement("div");health.className="card health-settings";container.append(health);
     health.innerHTML=`<h2>${textHTML("hostFilter")}</h2><p class="sub">${textHTML("backgroundHelp")}</p><p class="sub">${textHTML("logoutHelp")}</p>${!trayInfo.available ? `<p class="sub">${escapeHtml(t("trayUnavailable",{reason:trayInfo.reason}))}</p>` : ""}<div class="server-grid" data-health-grid></div>`;
     page.drawHealth=()=>{
+        if(!page.active)return;
+        drawRestore();
+        $("#desktopSettings button[type=submit]",container).disabled=restoreState.running;
+        $("[data-backup-all]",backups).disabled=restoreState.running || !state.servers.some(s=>s.url && s.connected && !(backupState.servers.get(s.id)?.url === s.url && backupState.servers.get(s.id)?.running));
+        $("[data-backup-config]",backups).disabled=restoreState.running || !!backupState.config?.running;
+        const configStatus=$("[data-config-backup-status]",backups);configStatus.textContent=backupStatus(backupState.config);configStatus.classList.toggle("backup-error",!!backupState.config?.error);
         const grid=$("[data-health-grid]",health),keep=new Set();
         for(const server of state.servers) {
             keep.add(server.id);
             let card=$(`[data-health-server="${server.id}"]`,grid);
-            if(!card){card=document.createElement("div");card.dataset.healthServer=server.id;card.innerHTML='<h3></h3><p class="health-metrics"></p><div data-health-auth></div>';grid.append(card);}
+            if(!card){card=document.createElement("div");card.dataset.healthServer=server.id;card.innerHTML='<h3></h3><p class="health-metrics"></p><div class="health-actions"><div data-health-auth></div><button class="btn xs" data-server-backup="'+server.id+'"></button></div><p class="backup-result" role="status" data-server-backup-status></p>';grid.append(card);}
             $("h3",card).textContent=server.label+" · "+t(server.role || "secondary");
             $(".health-metrics",card).textContent=healthText(hostHealth.get(server.id)) || t("loading");
             setHTML($("[data-health-auth]",card),server.connected ? `<button class="btn xs" data-settings-logout="${server.id}">${textHTML("logout")}</button>` : loginHTML(server));
+            const stored=backupState.servers.get(server.id),value=stored?.url === server.url ? stored : null,backupButton=$("[data-server-backup]",card),status=$("[data-server-backup-status]",card);
+            backupButton.textContent=t(value?.running ? "backupRunning" : "backupServer");backupButton.disabled=restoreState.running || !server.connected || !server.url || !!value?.running;
+            status.textContent=backupStatus(value);status.classList.toggle("backup-error",!!value?.error);
         }
         for(const card of $$("[data-health-server]",grid))if(!keep.has(card.dataset.healthServer))card.remove();
     };
     health.onclick=async event=>{
+        const backup=event.target.closest("[data-server-backup]");if(backup){if(!backup.disabled)await backupServer(serverById(backup.dataset.serverBackup));return;}
         const button=event.target.closest("[data-settings-logout]");if(!button)return;
         button.disabled=true;
         try {const server=serverById(button.dataset.settingsLogout);await api(server,"/auth",{method:"DELETE"});server.connected=false;hostHealth.delete(server.id);renderPills();page.drawHealth();}catch(error){showError(error);button.disabled=false;}
     };
+    const onBackup=()=>page.drawHealth();document.addEventListener("backup-progress",onBackup);
+    page.dispose=()=>document.removeEventListener("backup-progress",onBackup);
     bindLogins(health,{get active(){return page.active},refresh:async()=>page.drawHealth()});
     page.drawHealth();
     draw();

@@ -82,6 +82,10 @@ func (a *App) server(id string) (Server, error) {
 }
 
 func (a *App) Request(id, path, method, body string, stream bool) (APIResponse, error) {
+	return a.request(id, path, method, strings.NewReader(body), "application/json", stream)
+}
+
+func (a *App) request(id, path, method string, body io.Reader, contentType string, stream bool) (APIResponse, error) {
 	if path == "/auth" && method == "DELETE" {
 		lock := a.authLock(id)
 		lock.Lock()
@@ -119,11 +123,11 @@ func (a *App) Request(id, path, method, body string, stream bool) (APIResponse, 
 			cancel()
 		}
 	}()
-	req, err := http.NewRequestWithContext(ctx, method, s.URL+path, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, s.URL+path, body)
 	if err != nil {
 		return APIResponse{}, errors.New("could not create API request")
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	a.mu.Lock()
 	sess := a.sessions[id]
 	a.mu.Unlock()

@@ -14,6 +14,7 @@ import (
 // Stateful mock: the native test checks the resulting Pi-hole data, not just
 // button labels. Mutations preserve server-specific comments and group IDs.
 func desktopTestApp(t *testing.T) *App {
+	backupZIP := testBackupZIP(t)
 	var mu sync.Mutex
 	collections := map[string]map[string][]map[string]any{}
 	hosts := map[string][]string{}
@@ -41,6 +42,18 @@ func desktopTestApp(t *testing.T) *App {
 		mu.Lock()
 		defer mu.Unlock()
 		path, host := r.URL.Path, r.URL.Host
+		if path == "/api/teleporter" && r.Method == "POST" {
+			if err := r.ParseMultipartForm(50 * 1024 * 1024); err != nil {
+				return jsonResponse(400, `{}`), nil
+			}
+			defer r.MultipartForm.RemoveAll()
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				return jsonResponse(400, `{}`), nil
+			}
+			defer file.Close()
+			return jsonResponse(200, `{"files":["etc/pihole/gravity.db->domainlist"]}`), nil
+		}
 		var body map[string]any
 		if r.Body != nil {
 			b, _ := io.ReadAll(r.Body)
@@ -188,6 +201,8 @@ func desktopTestApp(t *testing.T) *App {
 			return response(200, map[string]any{kind: items}), nil
 		}
 		switch path {
+		case "/api/teleporter":
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/zip"}}, Body: io.NopCloser(strings.NewReader(string(backupZIP)))}, nil
 		case "/api/queries":
 			id, domain, timestamp := 1, "example.com", time.Now().Unix()
 			status := "FORWARDED"

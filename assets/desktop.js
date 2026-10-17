@@ -2,7 +2,7 @@
 (() => {
     // The native wrapper rejects with JSON strings; give the dashboard the
     // Error objects its existing error handlers expect.
-    for (const name of ["nativeRequest", "nativeLogin", "nativeReadStream", "nativeCancelStream", "nativeSaveServers", "nativePreference", "nativeUIError", "nativePreviewSync", "nativeApplySync", "nativeMonitor", "nativeTrayStatus", "nativeMinimizeToTray"]) {
+    for (const name of ["nativeRequest", "nativeLogin", "nativeReadStream", "nativeCancelStream", "nativeSaveServers", "nativeBackupServer", "nativeBackupConfig", "nativeRestoreServer", "nativeRestoreConfig", "nativePreference", "nativeUIError", "nativePreviewSync", "nativeApplySync", "nativeMonitor", "nativeTrayStatus", "nativeMinimizeToTray"]) {
         const invoke = window[name];
         window[name] = async (...args) => {
             try { return await invoke(...args); }
@@ -23,13 +23,22 @@
                 }
             },
             removeItem: key => data.delete(key),
-            clear: () => data.clear()
+            clear: () => data.clear(),
+            replace: values => { data.clear(); for (const [key,value] of Object.entries(values)) data.set(key,String(value)); }
         };
     }
     const prefs = {...desktopConfig.preferences};
     prefs.ph_combo_cfg_v2 = JSON.stringify({servers: desktopConfig.servers});
     Object.defineProperty(window, "localStorage", {value: storage(prefs, true)});
     Object.defineProperty(window, "sessionStorage", {value: storage({}, false)});
+
+    window.restoreAppSettings = async contents => {
+        await pendingPreference;
+        const result = await nativeRestoreConfig(contents);
+        localStorage.replace({...result.config.preferences, ph_combo_cfg_v2:JSON.stringify({servers:result.config.servers})});
+        sessionStorage.clear();
+        return result;
+    };
 
     window.fetch = async (path, options = {}) => {
         const match = String(path).match(/^\/api(10|[1-9])(\/.*)$/);

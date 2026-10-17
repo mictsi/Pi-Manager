@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/base64"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +35,9 @@ func TestNativeDesktop(t *testing.T) {
 		t.Fatal("native window icon:", err)
 	}
 	if err = w.Bind("smokeResize", func(width, height int) { w.Dispatch(func() { w.SetSize(width, height, 0) }) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Bind("smokeRestoreZIP", func() string { return base64.StdEncoding.EncodeToString(testBackupZIP(t)) }); err != nil {
 		t.Fatal(err)
 	}
 	w.SetSize(2400, 1000, 0)
@@ -85,6 +91,8 @@ func TestNativeDesktop(t *testing.T) {
                         if(tab === "domains")assert(document.querySelector(".wildcard-option label").textContent===t("addDomainWildcard") && document.getElementById("domainWildcardHelp").textContent===t("domainWildcardHelp"),"Missing translated wildcard option");
                         else assert(!document.querySelector("[data-domain-wildcard]"),"Wildcard option appeared outside Domains");
                         if(tab === "gravity")assert(document.querySelector("[data-gravity-all]")?.textContent===t("updateGravityAll"),"Missing translated all-server Gravity action");
+                        if(tab === "settings")assert(document.querySelector("[data-backup-all]").textContent===t("backupAll") && document.querySelector("[data-backup-config]").textContent===t("backupConfig") && document.querySelector("[data-server-backup]").textContent===t("backupServer"),"Missing translated backup controls");
+                        if(tab === "settings")assert(document.querySelector("[data-restore-server]").textContent===t("restoreServer") && document.querySelector("[data-restore-config]").textContent===t("restoreConfig"),"Missing translated restore controls");
                         if(tab === "queries") {
                             assert(document.querySelector('[data-sort="queryResult"]').textContent===t("queryResult"),"Missing translated query outcome column");
                             assert(document.querySelector(".query-result svg")?.getAttribute("aria-hidden")==="true","Query status icon lacks accessible text handling");
@@ -404,6 +412,57 @@ func TestNativeDesktop(t *testing.T) {
                 state.page.drawHealth();assert(document.querySelector('[data-loginform="1"] input')===savedLogin && savedLogin.value==="saved-one","Health refresh reset a typed password");
                 document.querySelector('[data-loginform="1"]').requestSubmit();
                 await wait(()=>state.servers[0].connected && document.querySelector('[data-settings-logout="1"]'));
+                const backupForm=document.getElementById("desktopSettings"),backupName=document.querySelector('[data-server="1"] [data-name]');
+                document.querySelector('[data-server-backup="1"]').click();
+                await wait(()=>backupState.servers.get("1")?.path && !backupState.servers.get("1").running);
+                assert(backupState.servers.get("1").path.endsWith(".zip") && document.querySelector('[data-health-server="1"] [data-server-backup-status]').textContent.includes(backupState.servers.get("1").path),"Server backup did not show its saved ZIP path");
+                document.querySelector("[data-backup-config]").click();
+                await wait(()=>backupState.config?.path && !backupState.config.running);
+                assert(backupState.config.path.endsWith(".json") && document.querySelector("[data-config-backup-status]").textContent.includes(backupState.config.path),"App settings backup did not show its saved JSON path");
+                const realBackup=window.nativeBackupServer,backupCalls=[];let releaseBackup;
+                const backupGate=new Promise(resolve=>releaseBackup=resolve);
+                window.nativeBackupServer=async id=>{backupCalls.push(id);await backupGate;if(id==="2")throw new Error("simulated backup failure");return realBackup(id)};
+                document.querySelector('[data-server-backup="1"]').click();
+                document.querySelector("[data-backup-all]").click();
+                assert(backupCalls.join(",")==="1,2" && document.querySelector("[data-backup-all]").disabled,"Batch backup restarted a running backup or missed a host");
+                await switchTab("dashboard");releaseBackup();
+                await wait(()=>!backupState.servers.get("1").running && !backupState.servers.get("2").running);
+                await switchTab("settings");
+                assert(backupState.servers.get("1").path && document.querySelector('[data-health-server="2"] [data-server-backup-status]').textContent.includes("simulated backup failure"),"Batch backup lost successful results or concealed a per-host error across navigation");
+                window.nativeBackupServer=realBackup;
+                document.querySelector('[data-server-backup="2"]').click();
+                await wait(()=>backupState.servers.get("2")?.path && !backupState.servers.get("2").running);
+                assert(!document.querySelector('[data-health-server="2"] [data-server-backup-status]').classList.contains("backup-error"),"Retrying a failed backup did not clear the error");
+                const afterBackupForm=document.getElementById("desktopSettings"),afterBackupName=document.querySelector('[data-server="1"] [data-name]');
+                state.page.drawHealth();
+                assert(document.getElementById("desktopSettings")===afterBackupForm && document.querySelector('[data-server="1"] [data-name]')===afterBackupName,"Backup progress replaced the Settings form");
+                assert(backupForm!==afterBackupForm && backupName!==afterBackupName,"Navigation test did not recreate the Settings view");
+                assert(document.querySelector("[data-restore-server]").textContent===t("restoreServer") && document.querySelector("[data-restore-config]").textContent===t("restoreConfig"),"Restore actions missing");
+                const restoreInput=document.querySelector("[data-restore-zip]"),restoreFiles=new DataTransfer();
+                restoreFiles.items.add(new File([Uint8Array.from(atob(await smokeRestoreZIP()),c=>c.charCodeAt(0))],"server-backup.zip",{type:"application/zip"}));
+                restoreInput.files=restoreFiles.files;
+                document.querySelector("[data-restore-target]").value="2";
+                for(const input of document.querySelectorAll("[data-restore-section]"))input.checked=input.dataset.restoreSection==="domains";
+                const realConfirm=window.confirm;let restoreConfirmation="";
+                window.confirm=message=>{restoreConfirmation=message;return false};
+                document.querySelector("[data-restore-server-form]").requestSubmit();
+                assert(!restoreState.running && !restoreState.result && restoreConfirmation.includes("two.test") && restoreConfirmation.includes("server-backup.zip"),"Restore did not confirm target and file or ignored cancellation");
+                window.confirm=()=>true;
+                document.querySelector("[data-restore-server-form]").requestSubmit();
+                assert(restoreState.running && document.querySelector("[data-restore-config]").disabled && restoreInput.disabled,"Restore allowed concurrent jobs");
+                await switchTab("dashboard");
+                await wait(()=>!restoreState.running);
+                await switchTab("settings");
+                assert(!restoreState.error && restoreState.result.includes("two.test") && document.querySelector("[data-restore-status]").textContent.includes(".zip") && !serverById("2").connected,"Server restore lost result or retained its session");
+                await login(serverById("2"),"saved-two");state.page.drawHealth();
+                const restoreAppFiles=new DataTransfer();
+                restoreAppFiles.items.add(new File([JSON.stringify({servers:desktopConfig.servers,preferences:{ph_combo_language:"sv",ph_combo_theme:"light"}})],"settings.json",{type:"application/json"}));
+                document.querySelector("[data-restore-json]").files=restoreAppFiles.files;
+                document.querySelector("[data-restore-config-form]").requestSubmit();
+                await wait(()=>!restoreState.running);
+                assert(!restoreState.error && currentLanguage==="sv" && document.documentElement.dataset.theme==="light" && document.querySelector("[data-restore-status]").textContent.includes(".json") && state.servers.every(s=>!s.connected),"App settings restore did not apply preferences, reset sessions and show previous-config backup");
+                await Promise.all(state.servers.map(s=>login(s,s.password)));await setLanguage("en");
+                window.confirm=realConfirm;
                 for(let n=2;n<10;n++)document.getElementById("desktopAdd").click();
                 assert(document.querySelectorAll("#desktopServers [data-server]").length===10 && document.getElementById("desktopAdd").disabled,"Settings must allow ten servers");
                 const role=document.querySelector('[data-server="10"] [data-role]');role.value="main";role.dispatchEvent(new Event("change",{bubbles:true}));
@@ -446,5 +505,19 @@ func TestNativeDesktop(t *testing.T) {
 	}
 	if a.config.Get().Servers[0].Label != "Updated desktop name" || a.config.Get().Servers[0].Password != "saved-one" || a.config.Get().Preferences["ph_combo_theme"] != "light" {
 		t.Fatal("desktop settings were not persisted")
+	}
+	backups, err := os.ReadDir(filepath.Join(filepath.Dir(a.config.path), "backups"))
+	if err != nil || len(backups) < 4 {
+		t.Fatal("native backup controls did not save the expected files", err)
+	}
+	for _, file := range backups {
+		if strings.HasSuffix(file.Name(), ".part") {
+			t.Fatal("native backup left an incomplete file")
+		}
+		if strings.HasSuffix(file.Name(), ".zip") {
+			if err := validateBackupZIP(filepath.Join(filepath.Dir(a.config.path), "backups", file.Name())); err != nil {
+				t.Fatal("native backup ZIP is invalid", err)
+			}
+		}
 	}
 }
