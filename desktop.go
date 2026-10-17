@@ -77,15 +77,29 @@ func newDesktop(a *App) (webview.WebView, error) {
 	if err := setWindowIcon(w.Window()); err != nil {
 		a.log.Warn("application icon could not be set")
 	}
-	tray := setupTray(w)
+	exit := &exitController{config: a.config, dispatch: w.Dispatch, show: func() {},
+		prompt: func() { w.Eval("window.showExitDialog()") }, terminate: w.Terminate}
+	tray := setupTray(w, exit.Request)
+	exitHook, err := bindExitWindow(w, exit.Request)
+	if err != nil {
+		tray.close()
+		w.Destroy()
+		return nil, fmt.Errorf("cannot install exit confirmation: %w", err)
+	}
+	exit.show = exitHook.restore
+	if tray.restore != nil {
+		exit.show = tray.restore
+	}
 	for _, binding := range []struct {
 		name string
 		fn   any
 	}{
 		{"nativeTrayStatus", func() trayState { return tray.state }},
-		{"nativeMinimizeToTray", tray.Minimize},
+		{"nativeExitReady", exit.Ready},
+		{"nativeExitDecision", exit.Decide},
 	} {
 		if err = w.Bind(binding.name, binding.fn); err != nil {
+			exitHook.close()
 			tray.close()
 			w.Destroy()
 			return nil, err
@@ -95,7 +109,7 @@ func newDesktop(a *App) (webview.WebView, error) {
 		a.log.Info("system tray unavailable", "reason", tray.state.Reason)
 	}
 	tray.Update(a.config.Get().Servers, monitor.Get())
-	managed := &managedDesktop{WebView: w}
+	managed := &managedDesktop{WebView: w, exit: exit}
 	go monitor.Run(func(hosts []HostHealth) {
 		managed.mu.Lock()
 		defer managed.mu.Unlock()
@@ -103,12 +117,13 @@ func newDesktop(a *App) (webview.WebView, error) {
 			tray.Update(a.config.Get().Servers, hosts)
 		}
 	})
-	managed.cleanup = func() { a.Close(); tray.close() }
+	managed.cleanup = func() { a.Close(); exitHook.close(); tray.close() }
 	return managed, nil
 }
 
 type managedDesktop struct {
 	webview.WebView
+	exit    *exitController
 	mu      sync.Mutex
 	closed  bool
 	cleanup func()

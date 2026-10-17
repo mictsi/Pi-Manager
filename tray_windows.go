@@ -24,7 +24,7 @@ type notifyIconData struct {
 	BalloonIcon        uintptr
 }
 
-func newPlatformTray(w webview.WebView) (*desktopTray, error) {
+func newPlatformTray(w webview.WebView, requestExit func()) (*desktopTray, error) {
 	user := windows.NewLazySystemDLL("user32.dll")
 	shell := windows.NewLazySystemDLL("shell32.dll")
 	notify := shell.NewProc("Shell_NotifyIconW")
@@ -138,7 +138,7 @@ func newPlatformTray(w webview.WebView) (*desktopTray, error) {
 				if command == 1 {
 					restore()
 				} else if command == 2 {
-					w.Terminate()
+					requestExit()
 				}
 			}
 			return 0
@@ -157,7 +157,7 @@ func newPlatformTray(w webview.WebView) (*desktopTray, error) {
 	}
 	ready = true
 	return &desktopTray{
-		hide: func() { w.Dispatch(func() { hideToTray() }) },
+		restore: restore,
 		update: func(text string, status []string) {
 			w.Dispatch(func() {
 				lines = append([]string{}, status...)

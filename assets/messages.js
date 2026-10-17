@@ -1,6 +1,18 @@
 /* Every UI message has English, Danish, Greek and Swedish translations. */
 const UI_LANGUAGES = ["en", "da", "el", "sv"];
 const MESSAGES = {
+    setupPiHelp: ["Go to Settings to set up or log in to Pi-hole.", "Gå til Indstillinger for at konfigurere eller logge ind på Pi-hole.", "Μεταβείτε στις Ρυθμίσεις για ρύθμιση ή σύνδεση στο Pi-hole.", "Gå till Inställningar för att konfigurera eller logga in på Pi-hole."],
+    goToSettings: ["Go to Settings", "Gå til Indstillinger", "Μετάβαση στις Ρυθμίσεις", "Gå till Inställningar"],
+    exitNever: ["Cancel exit and keep the app open", "Annuller afslutning og hold appen åben", "Ακύρωση εξόδου και διατήρηση της εφαρμογής ανοιχτής", "Avbryt avslut och håll appen öppen"],
+    exitAlways: ["Exit without asking", "Afslut uden at spørge", "Έξοδος χωρίς ερώτηση", "Avsluta utan att fråga"],
+    exitAsk: ["Ask before exiting", "Spørg før afslutning", "Ερώτηση πριν την έξοδο", "Fråga innan avslut"],
+    exitBehaviorHelp: ["Choose what happens when you close the window or choose Quit. Change this setting to reset a remembered Exit or Cancel decision.", "Vælg, hvad der sker, når du lukker vinduet eller vælger Quit. Skift indstillingen for at nulstille et gemt valg af Afslut eller Annuller.", "Επιλέξτε τι συμβαίνει όταν κλείνετε το παράθυρο ή επιλέγετε Quit. Αλλάξτε τη ρύθμιση για να επαναφέρετε μια αποθηκευμένη επιλογή εξόδου ή ακύρωσης.", "Välj vad som händer när du stänger fönstret eller väljer Quit. Ändra inställningen för att återställa ett sparat val av Avsluta eller Avbryt."],
+    exitBehavior: ["Exit behavior", "Afslutningsadfærd", "Συμπεριφορά εξόδου", "Beteende vid avslut"],
+    rememberDecision: ["Remember my decision", "Husk mit valg", "Απομνημόνευση της επιλογής μου", "Kom ihåg mitt val"],
+    exitWarning: ["Exiting stops monitoring and any operations still running in Pi-Manager. Your Pi-hole servers will continue running.", "Afslutning stopper overvågning og igangværende handlinger i Pi-Manager. Dine Pi-hole-servere fortsætter med at køre.", "Η έξοδος σταματά την παρακολούθηση και τις εργασίες του Pi-Manager που εκτελούνται ακόμη. Οι διακομιστές Pi-hole θα συνεχίσουν να λειτουργούν.", "När du avslutar stoppas övervakning och pågående åtgärder i Pi-Manager. Dina Pi-hole-servrar fortsätter att köras."],
+    exitTitle: ["Exit Pi-Manager?", "Afslut Pi-Manager?", "Έξοδος από το Pi-Manager;", "Avsluta Pi-Manager?"],
+    cancel: ["Cancel", "Annuller", "Ακύρωση", "Avbryt"],
+    exit: ["Exit", "Afslut", "Έξοδος", "Avsluta"],
     mainBlocklistSource: ["Main server only", "Kun primær server", "Μόνο ο κύριος διακομιστής", "Endast huvudservern"],
     blocklistCountDrift: ["Blocklist count differs", "Antal bloklistedomæner afviger", "Διαφορετικό πλήθος αποκλεισμένων τομέων", "Antalet blockeringsdomäner avviker"],
     comparisonIncomplete: ["Comparison incomplete", "Sammenligning ufuldstændig", "Ελλιπής σύγκριση", "Ofullständig jämförelse"],
@@ -44,7 +56,6 @@ const MESSAGES = {
     memory: ["Memory", "Hukommelse", "Μνήμη", "Minne"],
     reachable: ["Reachable", "Tilgængelig", "Προσβάσιμος", "Nåbar"],
     unreachable: ["Unreachable", "Utilgængelig", "Μη προσβάσιμος", "Kan inte nås"],
-    minimizeTray: ["Minimize to tray", "Minimer til statusfelt", "Ελαχιστοποίηση στην περιοχή ειδοποιήσεων", "Minimera till systemfältet"],
     backgroundHelp: ["Server health is checked every 5 seconds, including while minimized. Missing sensors or unsupported metrics display —. Close the window or choose Quit to exit.", "Serverstatus kontrolleres hvert 5. sekund, også når vinduet er minimeret. Manglende målinger vises som —. Luk vinduet eller vælg Quit for at afslutte.", "Η κατάσταση ελέγχεται κάθε 5 δευτερόλεπτα, ακόμη και σε ελαχιστοποίηση. Οι μη διαθέσιμες μετρήσεις εμφανίζονται ως —. Κλείστε το παράθυρο ή επιλέξτε Quit για έξοδο.", "Serverstatus kontrolleras var 5:e sekund, även när fönstret är minimerat. Saknade mätvärden visas som —. Stäng fönstret eller välj Quit för att avsluta."],
     trayUnavailable: ["Tray unavailable: {reason}", "Statusfelt utilgængeligt: {reason}", "Μη διαθέσιμη περιοχή ειδοποιήσεων: {reason}", "Systemfältet är inte tillgängligt: {reason}"],
     syncHelp: ["Preview main-to-secondary changes before applying. Group memberships match by name; create missing groups on secondaries first. Local DNS sync includes A/AAAA host records and CNAME aliases.", "Gennemse ændringer før synkronisering. Grupper matches på navn; opret manglende grupper på sekundære først. Lokal DNS omfatter A/AAAA-poster og CNAME-aliaser.", "Ελέγξτε τις αλλαγές πριν την εφαρμογή. Οι ομάδες αντιστοιχίζονται βάσει ονόματος· δημιουργήστε πρώτα όσες λείπουν στους δευτερεύοντες. Το τοπικό DNS περιλαμβάνει εγγραφές A/AAAA και ψευδώνυμα CNAME.", "Förhandsgranska ändringar innan synkronisering. Grupper matchas efter namn; skapa saknade grupper på sekundärerna först. Lokal DNS omfattar A/AAAA-poster och CNAME-alias."],

@@ -10,7 +10,7 @@ import (
 
 // AppIndicator works on X11 and Wayland when a StatusNotifier host is present.
 // A window is never hidden unless that host has been detected.
-func newPlatformTray(w webview.WebView) (*desktopTray, error) {
+func newPlatformTray(w webview.WebView, requestExit func()) (*desktopTray, error) {
 	handles := []uintptr{}
 	load := func(name string) (uintptr, error) {
 		h, e := purego.Dlopen(name, purego.RTLD_NOW|purego.RTLD_LOCAL)
@@ -148,12 +148,12 @@ func newPlatformTray(w webview.WebView) (*desktopTray, error) {
 	appendItem(menu, quit)
 	window := bindLinuxTrayWindow(w, gtk, object)
 	signal(restore, "activate", purego.NewCallback(func(uintptr, uintptr) { window.restore() }), 0, 0, 0)
-	signal(quit, "activate", purego.NewCallback(func(uintptr, uintptr) { w.Terminate() }), 0, 0, 0)
+	signal(quit, "activate", purego.NewCallback(func(uintptr, uintptr) { requestExit() }), 0, 0, 0)
 	showAll(menu)
 	setMenu(ind, menu)
 	setStatus(ind, 1)
 	return &desktopTray{
-		hide: func() { w.Dispatch(window.hide) },
+		restore: window.restore,
 		update: func(_ string, lines []string) {
 			w.Dispatch(func() {
 				for i, item := range statusItems {

@@ -5,6 +5,17 @@ header.topbar { padding:12px 16px; }
 .toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
 .toolbar label { display:flex; gap:6px; align-items:center; }
 .toolbar .spacer { flex:1; }
+.dashboard-controls { display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px 24px; margin-bottom:14px; }
+.dashboard-controls .dashboard-hosts { flex:1 1 300px; min-width:0; min-height:41px; align-items:center; }
+.dashboard-refresh { flex:0 1 auto; justify-content:flex-end; margin:0 0 0 auto; }
+.dashboard-refresh [data-refresh-status] { flex-basis:100%; text-align:right; }
+.exit-dialog { width:min(480px,calc(100% - 32px)); color:var(--text); background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:24px; box-shadow:0 20px 70px #0006; }
+.exit-dialog::backdrop { background:#0008; }
+.exit-dialog h2 { margin-top:0; }
+.exit-dialog p { font-size:13px; line-height:1.7; }
+.exit-dialog .toolbar { justify-content:flex-end; margin:18px 0 0; }
+.exit-remember { display:flex; align-items:center; gap:8px; font-size:13px; }
+.exit-remember input { flex:none; }
 .toolbar input[type=text] { min-width:240px; }
 .fold { margin-top:14px; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; }
 .fold > summary { cursor:pointer; font-weight:600; }
@@ -232,6 +243,9 @@ select,input[type=text],input[type=password],textarea { background-color:var(--p
 .notice { display:flex; align-items:center; flex-wrap:wrap; gap:12px; border-radius:10px; padding:13px 16px; margin-top:14px; border:1px solid var(--border); }
 .notice.warning { background:color-mix(in srgb,var(--amber) 8%,var(--panel)); border-color:color-mix(in srgb,var(--amber) 38%,var(--border)); }
 .notice > div { flex:1; min-width:180px; }.notice p { margin:2px 0; font-size:12px; line-height:1.6; }
+.setup-notice { margin:0 0 14px; }
+.setup-notice strong { font-size:12px; overflow-wrap:anywhere; }
+.setup-notice .btn { white-space:normal; }
 .notice-icon { display:flex; color:var(--amber); }.notice-icon svg { width:20px; height:20px; }
 @keyframes workspace-spin { to { transform:rotate(360deg); } }
 @media(max-width:700px) {

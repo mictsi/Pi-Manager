@@ -12,19 +12,12 @@ type trayState struct {
 	Reason    string `json:"reason"`
 }
 type desktopTray struct {
-	state  trayState
-	hide   func()
-	update func(string, []string)
-	close  func()
+	state   trayState
+	restore func()
+	update  func(string, []string)
+	close   func()
 }
 
-func (t *desktopTray) Minimize() error {
-	if !t.state.Available {
-		return fmt.Errorf("system tray unavailable: %s", t.state.Reason)
-	}
-	t.hide()
-	return nil
-}
 func (t *desktopTray) Update(servers []Server, hosts []HostHealth) {
 	if !t.state.Available {
 		return
@@ -59,8 +52,8 @@ func (t *desktopTray) Update(servers []Server, hosts []HostHealth) {
 	}
 	t.update(fmt.Sprintf("Pi-Manager: %d/%d reachable", up, len(servers))+"\n"+strings.Join(lines, "\n"), lines)
 }
-func setupTray(w webview.WebView) *desktopTray {
-	t, err := newPlatformTray(w)
+func setupTray(w webview.WebView, requestExit func()) *desktopTray {
+	t, err := newPlatformTray(w, requestExit)
 	if err != nil {
 		return &desktopTray{state: trayState{Reason: err.Error()}, close: func() {}}
 	}

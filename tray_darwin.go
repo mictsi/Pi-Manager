@@ -15,7 +15,7 @@ func fmtTrayID() string { return strconv.FormatUint(trayClassID.Add(1), 10) }
 func nsString(text string) objc.ID {
 	return objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), text)
 }
-func newPlatformTray(w webview.WebView) (*desktopTray, error) {
+func newPlatformTray(w webview.WebView, requestExit func()) (*desktopTray, error) {
 	send := func(object objc.ID, selector string, args ...any) objc.ID {
 		return object.Send(objc.RegisterName(selector), args...)
 	}
@@ -32,7 +32,7 @@ func newPlatformTray(w webview.WebView) (*desktopTray, error) {
 	class, err := objc.RegisterClass("PiManagerTray"+fmtTrayID(), objc.GetClass("NSObject"), nil, nil, []objc.MethodDef{
 		{Cmd: objc.RegisterName("openDashboard:"), Fn: func(objc.ID, objc.SEL, objc.ID) { restore() }},
 		{Cmd: objc.RegisterName("minimizedDashboard:"), Fn: func(objc.ID, objc.SEL, objc.ID) { hide() }},
-		{Cmd: objc.RegisterName("quitDashboard:"), Fn: func(objc.ID, objc.SEL, objc.ID) { w.Terminate() }},
+		{Cmd: objc.RegisterName("quitDashboard:"), Fn: func(objc.ID, objc.SEL, objc.ID) { requestExit() }},
 	})
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func newPlatformTray(w webview.WebView) (*desktopTray, error) {
 	send(item, "setMenu:", menu)
 	send(center, "addObserver:selector:name:object:", target, objc.RegisterName("minimizedDashboard:"), nsString("NSWindowDidMiniaturizeNotification"), window)
 	return &desktopTray{
-		hide: func() { w.Dispatch(hide) },
+		restore: restore,
 		update: func(text string, lines []string) {
 			w.Dispatch(func() {
 				send(button, "setToolTip:", nsString(text))

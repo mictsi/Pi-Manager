@@ -37,8 +37,12 @@ window minimization available.
    Passwords are saved in `config.json` so connections can be restored.
 3. Mark exactly one server as **Main**. Set the others to **Secondary**. Use
    **Add server** to configure up to 10 servers in total.
-4. Save. The app attempts to connect using the saved passwords. A server's login
-   form can be used if it needs authentication.
+4. Save. The app attempts to connect using the saved passwords. Use the server's
+   login form in **Settings** if it needs authentication.
+
+Server setup and login controls are available only in **Settings**. Other views
+show a **Go to Settings** message for unconfigured or disconnected servers. The
+button opens Settings and focuses the relevant server's URL or password field.
 
 Logout is available only in **Settings**. It ends the current connection and
 suppresses background reconnection for that session. It does not erase the saved

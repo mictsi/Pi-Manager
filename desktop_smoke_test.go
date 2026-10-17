@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -31,6 +32,15 @@ func TestNativeDesktop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Destroy()
+	var exitAttempts atomic.Int32
+	w.(*managedDesktop).exit.terminate = func() { exitAttempts.Add(1) }
+	if err := w.Bind("smokeRequestExit", w.(*managedDesktop).exit.Request); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Bind("smokeExitAttempts", func() int32 { return exitAttempts.Load() }); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := setWindowIcon(w.Window()); err != nil {
 		t.Fatal("native window icon:", err)
 	}
@@ -69,6 +79,14 @@ func TestNativeDesktop(t *testing.T) {
             try {
                 await wait(() => typeof state !== "undefined" && state.ready && document.getElementById("desktopSettings"));
                 assert(document.getElementById("tabContent").getBoundingClientRect().width >= innerWidth-2, "Window width is constrained");
+                for(const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift"]) {
+                    await switchTab(tab);
+                    assert(!document.querySelector('[data-loginform],input[type="password"]'),"Login controls outside Settings on first launch: "+tab);
+                    assert(document.querySelector("[data-setup-message]")?.textContent===t("setupPiHelp"),"Missing setup guidance for unconfigured servers: "+tab);
+                }
+                document.querySelector("[data-open-settings]").click();
+                await wait(()=>state.activeTab==="settings" && document.activeElement.matches('[data-server="1"] [data-url]'));
+
                 document.querySelector('[data-server="1"] [data-url]').value="http://one.test/api";
                 document.querySelector('[data-server="2"] [data-url]').value="http://two.test/api";
                 document.querySelector('[data-server="1"] [data-password]').value="saved-one";
@@ -80,11 +98,20 @@ func TestNativeDesktop(t *testing.T) {
                     await nativeRequest("1", "invalid-path", "GET", "", false);
                     throw new Error("Invalid request was accepted");
                 } catch (error) { assert(error.message.includes("API path"), "Native errors are not Error objects"); }
-                const trayStatus=await nativeTrayStatus();
-                if(!trayStatus.available) {
-                    assert(document.getElementById("minimizeTray").disabled,"Unavailable tray must not hide the window");
-                    try {await nativeMinimizeToTray();throw new Error("Unavailable tray was accepted")}catch(error){assert(error.message.includes("system tray unavailable"),"Missing tray failure reason")}
-                }
+                assert(!document.getElementById("minimizeTray"),"Minimize-to-tray button was not removed");
+                await smokeRequestExit();await wait(()=>document.getElementById("exitDialog")?.open);
+                await smokeRequestExit();
+                assert(document.querySelectorAll("#exitDialog").length===1 && document.activeElement.dataset.exitDecision==="cancel","Exit confirmation duplicated or defaulted to Exit");
+                document.querySelector('[data-exit-decision="cancel"]').click();await wait(()=>!document.getElementById("exitDialog"));
+                assert(await smokeExitAttempts()===0 && !desktopConfig.preferences.ph_combo_exit_decision,"Cancel exited or persisted an unchecked choice");
+                await smokeRequestExit();await wait(()=>document.getElementById("exitDialog")?.open);
+                document.querySelector("[data-exit-remember]").checked=true;
+                document.querySelector('[data-exit-decision="cancel"]').click();await wait(()=>!document.getElementById("exitDialog"));
+                assert(document.querySelector("[data-exit-behavior]").value==="cancel","Remembered Cancel did not update Settings");
+                await smokeRequestExit();await new Promise(r=>setTimeout(r,30));
+                assert(!document.getElementById("exitDialog") && await smokeExitAttempts()===0,"Remembered Cancel showed a prompt or exited");
+                const exitBehavior=document.querySelector("[data-exit-behavior]");exitBehavior.value="ask";exitBehavior.dispatchEvent(new Event("change"));
+                await wait(()=>!exitBehavior.disabled);
                 for (const values of Object.values(MESSAGES)) assert(values.length===4 && values.every(Boolean), "Incomplete translation");
                 savePreference("dashboard_details",false);
                 for (const language of ["en","el","sv","da","en"]) {
@@ -97,6 +124,10 @@ func TestNativeDesktop(t *testing.T) {
                         else assert(!document.querySelector("[data-domain-wildcard]"),"Wildcard option appeared outside Domains");
                         if(tab === "gravity")assert(document.querySelector("[data-gravity-all]")?.textContent===t("updateGravityAll"),"Missing translated all-server Gravity action");
                         if(tab === "settings")assert(document.querySelector("[data-backup-all]").textContent===t("backupAll") && document.querySelector("[data-backup-config]").textContent===t("backupConfig") && document.querySelector("[data-server-backup]").textContent===t("backupServer"),"Missing translated backup controls");
+                        if(tab === "dashboard") {
+                            const controls=document.querySelector(".dashboard-controls"),hosts=controls.querySelector(".dashboard-hosts").getBoundingClientRect(),refresh=controls.querySelector(".dashboard-refresh").getBoundingClientRect();
+                            assert(hosts.left<refresh.left && Math.abs(hosts.top-refresh.top)<2 && Math.abs(refresh.right-controls.getBoundingClientRect().right)<2,"Dashboard hosts/refresh are not aligned left/right on the same row: "+JSON.stringify({hosts:hosts.toJSON(),refresh:refresh.toJSON(),controls:controls.getBoundingClientRect().toJSON(),width:innerWidth}));
+                        }
                         if(tab === "settings")assert(document.querySelector("[data-restore-server]").textContent===t("restoreServer") && document.querySelector("[data-restore-config]").textContent===t("restoreConfig"),"Missing translated restore controls");
                         if(tab === "queries") {
                             assert(document.querySelector('[data-sort="queryResult"]').textContent===t("queryResult"),"Missing translated query outcome column");
@@ -413,10 +444,24 @@ func TestNativeDesktop(t *testing.T) {
                 document.querySelector('[data-settings-logout="1"]').click();
                 await wait(()=>!state.servers[0].connected);
                 assert(!document.querySelector('[data-settings-logout="1"]') && document.querySelector('[data-loginform="1"]'),"Settings logout did not update locally");
+                for(const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift"]) {
+                    await switchTab(tab);
+                    assert(!document.querySelector('[data-loginform],input[type="password"]'),"Login controls outside Settings after disconnect: "+tab);
+                    assert(document.querySelector("[data-setup-message]")?.textContent===t("setupPiHelp") && document.querySelector("[data-setup-servers]").textContent.includes(serverById("1").label),"Disconnected server did not direct the user to Settings: "+tab);
+                }
+                for(const language of ["el","sv","da","en"]) {
+                    await setLanguage(language);
+                    assert(document.querySelector("[data-open-settings]").textContent===t("goToSettings") && document.querySelector("[data-setup-message]").textContent===t("setupPiHelp"),"Setup message was not translated");
+                }
+                document.querySelector("[data-open-settings]").click();
+                await wait(()=>state.activeTab==="settings" && document.activeElement.matches('[data-server="1"] [data-password]'));
                 const savedLogin=document.querySelector('[data-loginform="1"] input');savedLogin.value="saved-one";
                 state.page.drawHealth();assert(document.querySelector('[data-loginform="1"] input')===savedLogin && savedLogin.value==="saved-one","Health refresh reset a typed password");
                 document.querySelector('[data-loginform="1"]').requestSubmit();
                 await wait(()=>state.servers[0].connected && document.querySelector('[data-settings-logout="1"]'));
+                await switchTab("dashboard");
+                assert(!document.querySelector("[data-setup-notice]"),"Successful Settings login left a stale setup notice");
+                await switchTab("settings");
                 const backupForm=document.getElementById("desktopSettings"),backupName=document.querySelector('[data-server="1"] [data-name]');
                 const backupBeforeDenied=window.nativeBackupServer;
                 window.nativeBackupServer=window.smokeBackupDenied;
@@ -507,6 +552,12 @@ func TestNativeDesktop(t *testing.T) {
                 assert(!document.querySelector("[data-logout],[data-settings-logout]"),"Logout exists outside Settings");
                 await nativePreference("ph_combo_theme","light");
                 if (errors.length) throw new Error(errors.join("; "));
+                await nativePreference("ph_combo_exit_decision","ask");
+                await smokeRequestExit();await wait(()=>document.getElementById("exitDialog")?.open);
+                assert(document.querySelector('[data-exit-decision="exit"]').textContent===t("exit") && document.querySelector(".exit-remember").textContent.trim()===t("rememberDecision"),"Exit dialog labels missing");
+                document.querySelector("[data-exit-remember]").checked=true;
+                document.querySelector('[data-exit-decision="exit"]').click();await wait(()=>!document.getElementById("exitDialog"));
+                assert(await smokeExitAttempts()===1,"Exit was not dispatched after confirmation");
                 await smokeReport("ok");
             } catch (error) { await smokeReport(String(error)+"\n"+String(error.stack || "")); }
         });`)
@@ -523,7 +574,7 @@ func TestNativeDesktop(t *testing.T) {
 	if message := <-result; message != "ok" {
 		t.Fatal(message)
 	}
-	if a.config.Get().Servers[0].Label != "Updated desktop name" || a.config.Get().Servers[0].Password != "saved-one" || a.config.Get().Preferences["ph_combo_theme"] != "light" {
+	if a.config.Get().Servers[0].Label != "Updated desktop name" || a.config.Get().Servers[0].Password != "saved-one" || a.config.Get().Preferences["ph_combo_theme"] != "light" || a.config.Get().Preferences[exitPreference] != "exit" {
 		t.Fatal("desktop settings were not persisted")
 	}
 	backups, err := os.ReadDir(filepath.Join(filepath.Dir(a.config.path), "backups"))

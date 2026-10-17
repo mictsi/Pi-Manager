@@ -97,11 +97,6 @@ function renderShell() {
     };
     setHTML($("#tabs"), TAB_IDS.map(id => `<button data-tab="${id}" class="${id === state.activeTab ? "active" : ""}">${textHTML(id)}</button>`).join(""));
     $("#tabs").onclick = event => { const button = event.target.closest("[data-tab]"); if (button) switchTab(button.dataset.tab).catch(showError); };
-    let trayButton=$("#minimizeTray");
-    if (!trayButton) {trayButton=document.createElement("button");trayButton.id="minimizeTray";trayButton.className="btn xs";$(".topbar-actions").prepend(trayButton);}
-    trayButton.textContent=t("minimizeTray");trayButton.disabled=!trayInfo.available;
-    trayButton.title=trayInfo.available ? t("minimizeTray") : t("trayUnavailable",{reason:trayInfo.reason});
-    trayButton.onclick=()=>nativeMinimizeToTray().catch(showError);
     renderPills();
 }
 async function setLanguage(language, render = true) {
@@ -144,8 +139,30 @@ const VIEW_ICONS={
     settings:'<path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3"/><circle cx="16" cy="17" r="3"/>'
 };
 function viewIcon(tab){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${VIEW_ICONS[tab] || VIEW_ICONS.domains}</svg>`;}
+function updateSetupNotice(container) {
+    let notice=$("[data-setup-notice]",container);
+    const pending=state.servers.filter(server=>!server.url || (!server.connected && !server.checking));
+    if(state.activeTab === "settings" || !pending.length){notice?.remove();return;}
+    if(!notice) {
+        notice=document.createElement("div");notice.className="notice setup-notice";notice.dataset.setupNotice="";notice.setAttribute("role","status");
+        notice.innerHTML='<div><strong data-setup-servers></strong><p data-setup-message></p></div><button class="btn xs" data-open-settings></button>';
+        const heading=$(".view-heading",container);if(heading)heading.after(notice);else container.prepend(notice);
+        $("[data-open-settings]",notice).onclick=async event=>{
+            event.preventDefault();event.stopPropagation();
+            const server=state.servers.find(s=>!s.url || !s.connected);
+            try {
+                await switchTab("settings");
+                if(server)$(`[data-server="${server.id}"] ${server.url ? "[data-password]" : "[data-url]"}`,state.page.container)?.focus();
+            } catch(error){showError(error);}
+        };
+    }
+    $("[data-setup-servers]",notice).textContent=pending.map(server=>server.label).join(", ");
+    $("[data-setup-message]",notice).textContent=t("setupPiHelp");
+    $("[data-open-settings]",notice).textContent=t("goToSettings");
+}
 function updateViewChrome(container) {
     if(!container)return;
+    updateSetupNotice(container);
     const connections=$("[data-view-connections]",container),main=$("[data-view-main]",container),count=$("[data-view-count]",container);
     if(connections)connections.textContent=state.servers.filter(server=>server.connected).length+" / "+state.servers.filter(server=>server.url).length;
     if(main)main.textContent=state.servers.find(server=>server.role === "main")?.label || "—";
@@ -154,7 +171,7 @@ function updateViewChrome(container) {
     if(empty && table)empty.hidden=!!$("tbody tr",table);
 }
 function renderViewChrome(container,tab) {
-    if(tab === "dashboard")return;
+    if(tab === "dashboard"){updateSetupNotice(container);return;}
     container.classList.add("workspace-view","view-"+tab);
     const heading=document.createElement("div");heading.className="view-heading";
     heading.innerHTML=`<div class="view-title-group"><span class="view-icon">${viewIcon(tab)}</span><div><span class="overview-eyebrow">${textHTML("workspace")}</span><h2>${textHTML(tab)}</h2><p>${textHTML(tab+"Intro")}</p></div></div><div class="view-facts"><div><span>${textHTML("viewConnections")}</span><strong data-view-connections></strong></div><div><span>${textHTML("main")}</span><strong data-view-main></strong></div>${container._visibleCount!==undefined ? `<div><span>${textHTML("viewRecords")}</span><strong data-view-count></strong></div>` : ""}</div>`;
@@ -197,10 +214,10 @@ async function startPolling(page, container, key, refresh) {
     await page.refresh();
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.page?.refresh) state.page.refresh(); });
-function loginHTML(server) {
+function settingsLoginHTML(server) {
     return `<form class="login-form" data-loginform="${server.id}"><input type="password" autocomplete="current-password" aria-label="${textHTML("password")}" placeholder="${textHTML("password")}" data-loginpw="${server.id}"><button class="btn primary xs">${textHTML("login")}</button></form>${server.error ? `<p class="sub">${escapeHtml(server.error)}</p>` : ""}`;
 }
-function bindLogins(container, page) {
+function bindSettingsLogins(container, page) {
     container.addEventListener("submit", async event => {
         const form = event.target.closest("[data-loginform]");
         if (!form) return;
@@ -334,8 +351,7 @@ async function renderDashboard(container,page) {
     const selectedServers=()=>state.servers.filter(s=>selected===null || selected.includes(s.id));
     const foldPreference=key=>"dashboard_"+(key === "details" ? "details_expanded_v2" : key);
     const sectionOpen=key=>preference(foldPreference(key),key === "details");
-    container.innerHTML=`<div class="toolbar">${refreshControls("dashboard")}</div>
-        <fieldset class="target-picker dashboard-hosts"><legend>${textHTML("hostFilter")}</legend><label><input type="checkbox" data-all-hosts ${selected === null ? "checked" : ""}>${textHTML("allHosts")}</label>${state.servers.map(s=>`<label><input type="checkbox" data-dashboard-host="${s.id}" ${selected===null || selected.includes(s.id) ? "checked" : ""}>${escapeHtml(s.label)}</label>`).join("")}</fieldset>
+    container.innerHTML=`<div class="dashboard-controls"><div class="target-picker dashboard-hosts" role="group" aria-label="${textHTML("hostFilter")}"><span class="count-note">${textHTML("hostFilter")}</span><label><input type="checkbox" data-all-hosts ${selected === null ? "checked" : ""}>${textHTML("allHosts")}</label>${state.servers.map(s=>`<label><input type="checkbox" data-dashboard-host="${s.id}" ${selected===null || selected.includes(s.id) ? "checked" : ""}>${escapeHtml(s.label)}</label>`).join("")}</div><div class="toolbar dashboard-refresh">${refreshControls("dashboard")}</div></div>
         <div class="combined-summary" id="summaryCombined"></div><p class="count-note">${textHTML("sumNote")}</p>
         <div class="server-grid" id="dashGrid">${state.servers.map(s=>`<div class="card" id="summary${s.id}"></div>`).join("")}</div>
         <details class="fold" data-fold="details" ${sectionOpen("details") ? "open" : ""}><summary>${textHTML("details")}</summary><div class="chart-grid">${["history","clientHistory","queryTypes","upstreams"].map(key=>`<div class="card chart-panel"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div class="chart-box"><canvas id="chart-${key}-combined" aria-label="${textHTML(key)}"></canvas></div></div>`).join("")}</div></details>
@@ -357,7 +373,7 @@ async function renderDashboard(container,page) {
             const card=document.getElementById("summary"+server.id);card.hidden=!servers.includes(server);
             const item=server.connected ? data.get(server.id) : null,q=item?.summary?.queries;
             let html=`<h2><span class="tag tag-${server.id}">${escapeHtml(server.label)}</span> <span class="role-badge">${textHTML(server.role || "secondary")}</span></h2>`;
-            if(!server.connected)html+=`<p class="sub">${textHTML(server.checking ? "connecting" : "disconnected")}</p>${loginHTML(server)}`;
+            if(!server.connected)html+=`<p class="sub">${textHTML(server.checking ? "connecting" : "disconnected")}</p>`;
             else if(!q)html+=`<p class="sub">${textHTML("unavailable")}</p>`;
             else {
                 const enabled=item.blocking?.blocking === "enabled";
@@ -399,10 +415,10 @@ async function renderDashboard(container,page) {
         savePreference("dashboard_hosts",selected);draw();page.refresh?.();
     });
     for(const fold of $$("[data-fold]",container))fold.addEventListener("toggle",()=>{
+        if(!page.active)return;
         savePreference(foldPreference(fold.dataset.fold),fold.open);
         if(fold.open){for(const chart of charts.values())chart.resize();page.refresh?.()}
     });
-    bindLogins(container,page);
     container.addEventListener("click",async event=>{
         if(event.target.closest("[data-open-drift]")){switchTab("drift").catch(showError);return;}
         const button=event.target.closest("[data-blocking]");if(!button)return;button.disabled=true;
@@ -1102,6 +1118,16 @@ async function renderSettings(container, page) {
         } catch (error) {if (page.active) status.textContent=t("saveError");showError(error);}
         finally {button.disabled=false;}
     };
+    const exitSettings=document.createElement("div");exitSettings.className="card";container.append(exitSettings);
+    exitSettings.innerHTML=`<h2>${textHTML("exitBehavior")}</h2><p class="sub">${textHTML("exitBehaviorHelp")}</p>${field("exitBehavior",`<select data-exit-behavior><option value="ask">${textHTML("exitAsk")}</option><option value="exit">${textHTML("exitAlways")}</option><option value="cancel">${textHTML("exitNever")}</option></select>`)}`;
+    const exitBehavior=$("[data-exit-behavior]",exitSettings);
+    exitBehavior.value=["exit","cancel"].includes(desktopConfig.preferences.ph_combo_exit_decision) ? desktopConfig.preferences.ph_combo_exit_decision : "ask";
+    exitBehavior.onchange=async()=>{
+        const choice=exitBehavior.value;exitBehavior.disabled=true;
+        try {await nativePreference("ph_combo_exit_decision",choice);desktopConfig.preferences.ph_combo_exit_decision=choice;toast(t("saved"),"ok");}
+        catch(error){exitBehavior.value=desktopConfig.preferences.ph_combo_exit_decision || "ask";showError(error);}
+        finally{exitBehavior.disabled=false;}
+    };
     const backups=document.createElement("div");backups.className="card backup-settings";container.append(backups);
     backups.innerHTML=`<h2>${textHTML("backups")}</h2><p class="sub">${textHTML("backupHelp")}</p><p class="sub" data-backup-permissions>${textHTML("backupPermissions")}</p><div class="toolbar"><button class="btn primary" data-backup-all>${textHTML("backupAll")}</button><button class="btn" data-backup-config>${textHTML("backupConfig")}</button></div><p class="sub">${textHTML("backupLoginHelp")}</p><p class="backup-result" role="status" data-config-backup-status></p>`;
     $("[data-backup-all]",backups).onclick=()=>Promise.all(state.servers.filter(s=>s.url && s.connected).map(backupServer));
@@ -1123,7 +1149,7 @@ async function renderSettings(container, page) {
             if(!card){card=document.createElement("div");card.dataset.healthServer=server.id;card.innerHTML='<h3></h3><p class="health-metrics"></p><div class="health-actions"><div data-health-auth></div><button class="btn xs" data-server-backup="'+server.id+'"></button></div><p class="backup-result" role="status" data-server-backup-status></p>';grid.append(card);}
             $("h3",card).textContent=server.label+" · "+t(server.role || "secondary");
             $(".health-metrics",card).textContent=healthText(hostHealth.get(server.id)) || t("loading");
-            setHTML($("[data-health-auth]",card),server.connected ? `<button class="btn xs" data-settings-logout="${server.id}">${textHTML("logout")}</button>` : loginHTML(server));
+            setHTML($("[data-health-auth]",card),server.connected ? `<button class="btn xs" data-settings-logout="${server.id}">${textHTML("logout")}</button>` : settingsLoginHTML(server));
             const stored=backupState.servers.get(server.id),value=stored?.url === server.url ? stored : null,backupButton=$("[data-server-backup]",card),status=$("[data-server-backup-status]",card);
             backupButton.textContent=t(value?.running ? "backupRunning" : "backupServer");backupButton.disabled=restoreState.running || !server.connected || !server.url || !!value?.running;
             status.textContent=backupStatus(value);status.classList.toggle("backup-error",!!value?.error);
@@ -1138,7 +1164,7 @@ async function renderSettings(container, page) {
     };
     const onBackup=()=>page.drawHealth();document.addEventListener("backup-progress",onBackup);
     page.dispose=()=>document.removeEventListener("backup-progress",onBackup);
-    bindLogins(health,{get active(){return page.active},refresh:async()=>page.drawHealth()});
+    bindSettingsLogins(health,{get active(){return page.active},refresh:async()=>page.drawHealth()});
     page.drawHealth();
     draw();
 }
@@ -1146,7 +1172,7 @@ async function renderSettings(container, page) {
 const gravityState = new Map();
 async function renderGravity(container, page) {
     container.innerHTML=`<div class="card gravity-actions"><div class="toolbar"><button class="btn primary" data-gravity-all>${textHTML("updateGravityAll")}</button><span class="status-line" role="status" data-gravity-all-status></span></div><p class="sub">${textHTML("gravityAllHelp")}</p></div><div class="server-grid">${state.servers.map(s=>`<div class="card"><h2>${escapeHtml(s.label)} · ${textHTML("gravity")}</h2><div class="stat-row"><span class="k">${textHTML("lastGravity")}</span><span id="gravLast${s.id}">–</span></div>
-        ${s.connected ? "" : loginHTML(s)}<button class="btn primary block" id="gravBtn${s.id}" ${!s.connected || gravityState.get(s.id)?.running ? "disabled" : ""}>${textHTML(gravityState.get(s.id)?.running ? "running" : "updateGravity")}</button><pre class="log" id="gravLog${s.id}" style="margin-top:12px"></pre></div>`).join("")}</div>`;
+        <button class="btn primary block" id="gravBtn${s.id}" ${!s.connected || gravityState.get(s.id)?.running ? "disabled" : ""}>${textHTML(gravityState.get(s.id)?.running ? "running" : "updateGravity")}</button><pre class="log" id="gravLog${s.id}" style="margin-top:12px"></pre></div>`).join("")}</div>`;
     function drawLog(server) {
         if (!page.active) return;
         const value=gravityState.get(server.id);
@@ -1155,7 +1181,6 @@ async function renderGravity(container, page) {
         log.textContent=value?.text || t("ready");log.scrollTop=log.scrollHeight;
         const button=document.getElementById("gravBtn"+server.id);
         button.disabled=!server.connected || !!value?.running;button.textContent=t(value?.running ? "running" : "updateGravity");
-        if (server.connected) $(`[data-loginform="${server.id}"]`,container)?.remove();
         drawAllButton();
     }
     function drawAllButton() {
@@ -1179,7 +1204,6 @@ async function renderGravity(container, page) {
             catch (error) {if (page.active) document.getElementById("gravLast"+server.id).textContent=humanError(error);}
         }));
     };
-    bindLogins(container,page);
     async function startGravity(server) {
         if(!server.connected || gravityState.get(server.id)?.running)return;
         const value={running:true,text:""};gravityState.set(server.id,value);notify(server);
@@ -1205,7 +1229,32 @@ async function renderGravity(container, page) {
     await page.refresh();
 }
 
+window.showExitDialog=()=>{
+    let dialog=$("#exitDialog");
+    if(dialog){dialog.focus();return;}
+    dialog=document.createElement("dialog");dialog.id="exitDialog";dialog.className="exit-dialog";
+    dialog.setAttribute("aria-labelledby","exitDialogTitle");dialog.setAttribute("aria-describedby","exitDialogHelp");
+    dialog.innerHTML=`<h2 id="exitDialogTitle">${textHTML("exitTitle")}</h2><p id="exitDialogHelp">${textHTML("exitWarning")}</p><label class="exit-remember"><input type="checkbox" data-exit-remember> ${textHTML("rememberDecision")}</label><p class="backup-result backup-error" role="alert" data-exit-error></p><div class="toolbar"><button class="btn" data-exit-decision="cancel" autofocus>${textHTML("cancel")}</button><button class="btn primary" data-exit-decision="exit">${textHTML("exit")}</button></div>`;
+    const decide=async decision=>{
+        if(dialog.dataset.busy)return;
+        dialog.dataset.busy="true";
+        for(const control of $$("button,input",dialog))control.disabled=true;
+        try {
+            const remember=$("[data-exit-remember]",dialog).checked;
+            await nativeExitDecision(decision,remember);
+            if(remember)desktopConfig.preferences.ph_combo_exit_decision=decision;
+            dialog.close();dialog.remove();
+            const setting=$("[data-exit-behavior]");if(setting)setting.value=desktopConfig.preferences.ph_combo_exit_decision || "ask";
+        } catch(error){$("[data-exit-error]",dialog).textContent=humanError(error);}
+        finally {delete dialog.dataset.busy;for(const control of $$("button,input",dialog))control.disabled=false;}
+    };
+    dialog.onclick=event=>{const button=event.target.closest("[data-exit-decision]");if(button)decide(button.dataset.exitDecision);};
+    dialog.oncancel=event=>{event.preventDefault();decide("cancel");};
+    document.body.append(dialog);dialog.showModal();
+};
+
 async function bootstrap() {
+    await nativeExitReady();
     trayInfo=await nativeTrayStatus();
     const updateHealth=async()=>{
         try {hostHealth=new Map((await nativeMonitor()).map(h=>[h.id,h]));for(const s of state.servers){const h=hostHealth.get(s.id);if(h?.sampledAt && !s.checking)s.connected=h.authenticated;}renderPills();if (state.activeTab==="settings") state.page?.drawHealth?.();} catch { /* A closed native window ends polling. */ }
@@ -1214,7 +1263,7 @@ async function bootstrap() {
     const saved=state.servers.filter(s=>s.url && s.password);
     const hash=decodeURIComponent(location.hash.slice(1));
     await switchTab(state.servers.every(s=>!s.url) ? "settings" : TAB_IDS.includes(hash) ? hash : "dashboard");
-    await Promise.all(saved.map(async server=>{try {await login(server,server.password);} catch { /* Login cards show the localized failure and allow a corrected password. */ }}));
+    await Promise.all(saved.map(async server=>{try {await login(server,server.password);} catch { /* Settings shows login failures and lets the user correct the password. */ }}));
     state.ready=true;
     if (saved.length) {
         if (state.page?.refresh) await state.page.refresh();

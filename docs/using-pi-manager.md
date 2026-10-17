@@ -61,7 +61,15 @@ each server keeps its own progress log.
 
 When a usable tray is available, minimizing hides the running window from the
 Windows/Linux taskbar or macOS Dock. Use the tray menu to restore the dashboard
-or quit. The app also offers an explicit tray-minimize control.
+or quit. Use the window's normal minimize control to minimize to tray.
+
+Closing the window or choosing Quit opens a confirmation with **Exit** and
+**Cancel**. **Remember my decision** saves the selected behavior in `config.json`.
+Remembering Exit skips future confirmations; remembering Cancel keeps the app
+open on subsequent close/quit requests. Change **Settings → Exit behavior** to
+**Ask before exiting** to restore the confirmation, or choose a different
+behavior. Exiting stops Pi-Manager's monitoring and active operations; Pi-hole
+servers keep running.
 
 The native monitor keeps sampling while the dashboard is hidden, normally every
 five seconds after the previous sample completes. Tray status includes

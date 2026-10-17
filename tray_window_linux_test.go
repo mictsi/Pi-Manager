@@ -75,8 +75,20 @@ func TestNativeLinuxTrayWindow(t *testing.T) {
 					message = "OS minimize signal did not hide the taskbar entry"
 				}
 				window.restore()
-				result <- message
-				w.Terminate()
+				closeEvent := gtkWindowStateEvent{Kind: 0, Window: getWindow(w.Window()), SendEvent: 1}
+				var closeHandled int32
+				emit(w.Window(), "delete-event", unsafe.Pointer(&closeEvent), &closeHandled)
+				w.Dispatch(func() {
+					exit := w.(*managedDesktop).exit
+					exit.mu.Lock()
+					pending := exit.pending
+					exit.mu.Unlock()
+					if !pending || closeHandled != 1 || visible(w.Window()) != 1 {
+						message = "native window close bypassed confirmation or destroyed the window"
+					}
+					result <- message
+					w.Terminate()
+				})
 			})
 		})
 	})
