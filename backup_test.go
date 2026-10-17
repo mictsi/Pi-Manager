@@ -77,6 +77,39 @@ func TestServerBackupPreservesBinaryAndSession(t *testing.T) {
 	}
 }
 
+func TestBackupPermissionDeniedPreservesHintAndCanRetry(t *testing.T) {
+	archive := testBackupZIP(t)
+	allowed, calls := false, 0
+	a, logs := testApp(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Method != "GET" || request.URL.Path != "/api/teleporter" {
+			t.Fatal("backup attempted to change server permissions")
+		}
+		if !allowed {
+			return jsonResponse(403, `{"error":{"key":"forbidden","message":"Unable to export configuration","hint":"The current app session is not allowed to export Pi-hole config settings (webserver.api.app_sudo is false)"}}`), nil
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(archive))}, nil
+	})
+	a.sessions["1"] = session{url: a.config.Get().Servers[0].URL, sid: "permission-session-secret"}
+	if _, err := a.BackupServer("1"); err == nil || !strings.Contains(err.Error(), "webserver.api.app_sudo is false") {
+		t.Fatal("backup discarded Pi-hole's permission explanation", err)
+	}
+	if a.sessions["1"].sid == "" || calls != 1 || len(a.streams) != 0 {
+		t.Fatal("permission denial invalidated the login, retried or leaked a stream")
+	}
+	files, _ := filepath.Glob(filepath.Join(filepath.Dir(a.config.path), "backups", "*"))
+	if len(files) != 0 {
+		t.Fatal("permission denial created a backup file")
+	}
+	allowed = true // The administrator changes permissions on the Pi-hole host.
+	if _, err := a.BackupServer("1"); err != nil || calls != 2 {
+		t.Fatal("backup could not be retried after permissions changed", err)
+	}
+	if strings.Contains(logs.String(), "permission-session-secret") {
+		t.Fatal("backup logged its session")
+	}
+}
+
 type backupReadError struct{}
 
 func (backupReadError) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }

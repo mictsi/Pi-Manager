@@ -37,6 +37,19 @@ func jsonResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 }
 
+func TestResponseErrorHints(t *testing.T) {
+	for _, hint := range []string{`null`, `""`, `{ "details": "unsupported hint format" }`} {
+		err := responseError(APIResponse{Status: 403, Body: `{"error":{"message":"forbidden","hint":` + hint + `}}`})
+		if err == nil || err.Error() != "HTTP 403: forbidden" {
+			t.Fatal("optional hint damaged the primary API error", err)
+		}
+	}
+	err := responseError(APIResponse{Status: 400, Body: `{"error":{"message":"Invalid request","hint":"selected table is missing"}}`})
+	if err == nil || err.Error() != "HTTP 400: Invalid request: selected table is missing" {
+		t.Fatal("API error omitted its hint", err)
+	}
+}
+
 func TestAuthenticationAndRedactedLogging(t *testing.T) {
 	password, sid := "private-app-password", "private-session-id"
 	var authCalls int

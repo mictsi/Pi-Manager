@@ -53,6 +53,45 @@ connected servers** to export their Pi-hole configurations as Teleporter ZIP
 archives. Log in to any disconnected server before including it. Each server
 shows its saved path or error, and one failure does not prevent other backups.
 
+### Pi-hole permissions (including Docker)
+
+If backup returns **HTTP 403: Unable to export configuration**, Pi-hole is
+rejecting an app-password session without permission to export its configuration.
+Exports include authentication settings, so Pi-hole protects them with
+`webserver.api.app_sudo`. Enable it only for apps you trust: it also permits
+app-password sessions to change server settings.
+
+For Docker Compose, add this to the Pi-hole service's existing `environment`
+section, then run `docker compose up -d` to recreate it with the changed setting:
+
+```yaml
+environment:
+  FTLCONF_webserver_api_app_sudo: 'true'
+```
+
+For `docker run`, recreate the container with
+`-e FTLCONF_webserver_api_app_sudo=true`, preserving the existing volumes, ports
+and other options. A restart alone does not change container environment
+variables. Environment-managed Pi-hole settings must be changed in the container
+configuration rather than from Pi-Manager or the Pi-hole web UI.
+
+For a native Pi-hole installation running directly on the host, run this on
+that Pi-hole host:
+
+```sh
+sudo pihole-FTL --config webserver.api.app_sudo true
+```
+
+Alternatively, authenticate with the regular Pi-hole password accepted by the
+API. Retry the backup after changing the server's permissions. These settings
+apply to the Pi-hole server, whether you start Pi-Manager from its binary or
+from a desktop launcher.
+
+See Pi-hole's [app_sudo setting](https://docs.pi-hole.net/ftldns/configfile/#app_sudo)
+for the supported configuration methods.
+
+### Backup files
+
 Use **Back up app settings** to save Pi-Manager's saved configuration separately,
 including server passwords and preferences. Save any Settings edits first.
 

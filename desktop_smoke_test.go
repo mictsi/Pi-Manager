@@ -40,6 +40,11 @@ func TestNativeDesktop(t *testing.T) {
 	if err := w.Bind("smokeRestoreZIP", func() string { return base64.StdEncoding.EncodeToString(testBackupZIP(t)) }); err != nil {
 		t.Fatal(err)
 	}
+	if err := w.Bind("smokeBackupDenied", func(string) (BackupResult, error) {
+		return BackupResult{}, responseError(APIResponse{Status: 403, Body: `{"error":{"message":"Unable to export configuration","hint":"The current app session is not allowed to export Pi-hole config settings (webserver.api.app_sudo is false)"}}`})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	w.SetSize(2400, 1000, 0)
 	result := make(chan string, 1)
 	if err = w.Bind("smokeReport", func(message string) {
@@ -413,6 +418,21 @@ func TestNativeDesktop(t *testing.T) {
                 document.querySelector('[data-loginform="1"]').requestSubmit();
                 await wait(()=>state.servers[0].connected && document.querySelector('[data-settings-logout="1"]'));
                 const backupForm=document.getElementById("desktopSettings"),backupName=document.querySelector('[data-server="1"] [data-name]');
+                const backupBeforeDenied=window.nativeBackupServer;
+                window.nativeBackupServer=window.smokeBackupDenied;
+                document.querySelector('[data-server-backup="1"]').click();
+                await wait(()=>backupState.servers.get("1")?.error && !backupState.servers.get("1").running);
+                for(const language of ["en","da","el","sv"]) {
+                    await setLanguage(language);
+                    const displayed=document.querySelector('[data-health-server="1"] [data-server-backup-status]').textContent;
+                    assert(displayed.includes("FTLCONF_webserver_api_app_sudo=true") && displayed.includes("sudo pihole-FTL --config webserver.api.app_sudo true"),"Permission error omitted Docker or native instructions");
+                    assert(humanError(new Error("HTTP 403: Unable to export configuration"))===t("appSudoDenied"),"Older permission response without hint was not translated");
+                    assert(document.querySelector("[data-backup-permissions]").textContent===t("backupPermissions"),"Settings permission guidance was not translated");
+                }
+                await setLanguage("en");
+                assert(serverById("1").connected,"Backup permissions error logged out a valid session");
+                assert(humanError(new Error("restore cancelled: could not back up current server: HTTP 403: Unable to export configuration: webserver.api.app_sudo is false")).includes("app_sudo"),"Restore permission denial was mislabeled as a timeout");
+                window.nativeBackupServer=backupBeforeDenied;
                 document.querySelector('[data-server-backup="1"]').click();
                 await wait(()=>backupState.servers.get("1")?.path && !backupState.servers.get("1").running);
                 assert(backupState.servers.get("1").path.endsWith(".zip") && document.querySelector('[data-health-server="1"] [data-server-backup-status]').textContent.includes(backupState.servers.get("1").path),"Server backup did not show its saved ZIP path");

@@ -297,10 +297,15 @@ func responseError(r APIResponse) error {
 	}
 	var msg struct {
 		Error struct {
-			Message string `json:"message"`
+			Message string          `json:"message"`
+			Hint    json.RawMessage `json:"hint"`
 		} `json:"error"`
 	}
 	if json.Unmarshal([]byte(r.Body), &msg) == nil && msg.Error.Message != "" {
+		var hint string
+		if json.Unmarshal(msg.Error.Hint, &hint) == nil && hint != "" {
+			return fmt.Errorf("HTTP %d: %s: %s", r.Status, msg.Error.Message, hint)
+		}
 		return fmt.Errorf("HTTP %d: %s", r.Status, msg.Error.Message)
 	}
 	return fmt.Errorf("Pi-hole returned HTTP %d", r.Status)

@@ -22,10 +22,11 @@ function textHTML(key, values) { return escapeHtml(t(key, values)); }
 function setHTML(element, html) { if (element && element.innerHTML !== html) element.innerHTML = html; }
 function humanError(error) {
     const message = String(error?.message || error);
+    if (/^HTTP 403:/.test(message) && (message.includes("webserver.api.app_sudo") || message.includes("Unable to export configuration"))) return t("appSudoDenied");
     if (message.includes("cannot reach Pi-hole")) return t("networkError");
     if (message.includes("session expired") || error?.status === 401) return t("sessionExpired");
     if (/login rejected|Login failed/i.test(message)) return t("loginError");
-    if (/timed out|cancelled/.test(message)) return t("timeout");
+    if (/timed out|was cancelled/.test(message)) return t("timeout");
     if (message.includes("Gravity stream interrupted")) return t("interrupted");
     return t("serverError", {message});
 }
@@ -1102,7 +1103,7 @@ async function renderSettings(container, page) {
         finally {button.disabled=false;}
     };
     const backups=document.createElement("div");backups.className="card backup-settings";container.append(backups);
-    backups.innerHTML=`<h2>${textHTML("backups")}</h2><p class="sub">${textHTML("backupHelp")}</p><div class="toolbar"><button class="btn primary" data-backup-all>${textHTML("backupAll")}</button><button class="btn" data-backup-config>${textHTML("backupConfig")}</button></div><p class="sub">${textHTML("backupLoginHelp")}</p><p class="backup-result" role="status" data-config-backup-status></p>`;
+    backups.innerHTML=`<h2>${textHTML("backups")}</h2><p class="sub">${textHTML("backupHelp")}</p><p class="sub" data-backup-permissions>${textHTML("backupPermissions")}</p><div class="toolbar"><button class="btn primary" data-backup-all>${textHTML("backupAll")}</button><button class="btn" data-backup-config>${textHTML("backupConfig")}</button></div><p class="sub">${textHTML("backupLoginHelp")}</p><p class="backup-result" role="status" data-config-backup-status></p>`;
     $("[data-backup-all]",backups).onclick=()=>Promise.all(state.servers.filter(s=>s.url && s.connected).map(backupServer));
     $("[data-backup-config]",backups).onclick=backupAppConfig;
     const drawRestore=renderRestore(container,page);
