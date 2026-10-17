@@ -20,6 +20,16 @@ slower servers can make updates take longer. Use manual refresh whenever needed.
 Queries can be filtered and inspected across hosts. Dashboard polling pauses
 while the window is hidden; native health monitoring continues independently.
 
+Query rows use green for allowed results and red for blocked results, with SVG
+status icons and an **Allowed / blocked** column. Pending and unknown queries
+have separate neutral states; the detailed status remains available.
+
+Use a row's **Allow** or **Deny** button to save an exact rule for that domain on
+the server shown in the row. Existing exact entries keep their comments and
+group assignments when enabled or moved between lists. Rules affect future
+queries; the logged outcome keeps its original color. Filters, polling and the
+surrounding page stay in place.
+
 ## Manage records
 
 Choose target servers before applying changes in **Domains**, **Local DNS**,
@@ -27,6 +37,13 @@ Choose target servers before applying changes in **Domains**, **Local DNS**,
 narrow the records. Add, enable, disable and delete controls appear where
 supported by that resource. Only the affected table content updates after an
 action, preserving the surrounding view.
+
+In Domains, check **Add domain as wildcard** to include a domain and all its
+subdomains. For example, `example.com` becomes the regex `(\.|^)example\.com$`.
+A leading `*.` is optional.
+This works for allow and deny entries and for each domain in a multiline batch.
+Leave it unchecked for an exact entry, or choose Regular expression to enter
+your own regex without conversion.
 
 Each record view also offers **Sync secondaries from main**. Choose secondary
 targets, then confirm the change count to add missing entries and update changed

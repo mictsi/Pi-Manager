@@ -190,11 +190,16 @@ func desktopTestApp(t *testing.T) *App {
 		switch path {
 		case "/api/queries":
 			id, domain, timestamp := 1, "example.com", time.Now().Unix()
+			status := "FORWARDED"
 			var cursor any = "older-cursor"
 			if r.URL.Query().Get("cursor") != "" {
 				id, domain, timestamp, cursor = 2, "older.example.com", timestamp-1, nil
+				status = "GRAVITY_CNAME"
+				if host == "two.test" {
+					status = "DBBUSY"
+				}
 			}
-			return response(200, map[string]any{"queries": []map[string]any{{"id": id, "time": float64(timestamp), "domain": domain, "type": "A", "status": "FORWARDED", "client": map[string]string{"ip": "192.168.1.50", "name": "desktop"}}}, "cursor": cursor}), nil
+			return response(200, map[string]any{"queries": []map[string]any{{"id": id, "time": float64(timestamp), "domain": domain, "type": "A", "status": status, "client": map[string]string{"ip": "192.168.1.50", "name": "desktop"}}}, "cursor": cursor}), nil
 		case "/api/action/gravity":
 			return jsonResponse(200, "Gravity complete ✓\n"), nil
 		case "/api/stats/top_domains":

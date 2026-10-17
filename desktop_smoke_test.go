@@ -82,7 +82,14 @@ func TestNativeDesktop(t *testing.T) {
                         await switchTab(tab);
                         assert(document.documentElement.lang===language,"Wrong document language");
                         if(["domains","hosts","clients","lists"].includes(tab))assert(document.querySelector("[data-sync-secondaries]")?.textContent===t("syncSecondaries"),"Missing translated resource sync action");
+                        if(tab === "domains")assert(document.querySelector(".wildcard-option label").textContent===t("addDomainWildcard") && document.getElementById("domainWildcardHelp").textContent===t("domainWildcardHelp"),"Missing translated wildcard option");
+                        else assert(!document.querySelector("[data-domain-wildcard]"),"Wildcard option appeared outside Domains");
                         if(tab === "gravity")assert(document.querySelector("[data-gravity-all]")?.textContent===t("updateGravityAll"),"Missing translated all-server Gravity action");
+                        if(tab === "queries") {
+                            assert(document.querySelector('[data-sort="queryResult"]').textContent===t("queryResult"),"Missing translated query outcome column");
+                            assert(document.querySelector(".query-result svg")?.getAttribute("aria-hidden")==="true","Query status icon lacks accessible text handling");
+                            assert(document.querySelector('[data-query-action="allow"]').textContent===t("allow") && document.querySelector('[data-query-action="deny"]').textContent===t("deny"),"Missing translated query actions");
+                        }
                         assert(document.title==="Pi-Manager" && document.querySelector("header h1").textContent.startsWith("Pi-Manager"),"App branding changed during translation");
                         if(tab!=="dashboard")assert(document.querySelector(".view-heading") && document.querySelector(".view-icon svg"),"Missing workspace styling: "+tab);
                         assert(document.querySelector("#tabs [data-tab=queries]").textContent===t("queries"),"Tab was not translated");
@@ -178,6 +185,64 @@ func TestNativeDesktop(t *testing.T) {
                 await state.page.refresh();
                 assert(document.querySelector("[data-filter]")===queryFilter && queryFilter.value==="example.com" && document.querySelector("table")===queryTable,"Query refresh reset controls");
                 assert(document.querySelectorAll("tbody tr[data-key]").length===4,"Polling skipped the next query API page");
+                for(const status of ["GRAVITY","DENYLIST","REGEX","GRAVITY_CNAME","DENYLIST_CNAME","REGEX_CNAME","EXTERNAL_BLOCKED_IP","EXTERNAL_BLOCKED_NULL","EXTERNAL_BLOCKED_NXRA","EXTERNAL_BLOCKED_EDE15","DBBUSY","SPECIAL_DOMAIN","QUERY_EXTERNAL_BLOCKED_EDE15"])assert(queryOutcome(status)==="blocked","Blocked query status misclassified: "+status);
+                for(const status of ["FORWARDED","CACHE","CACHE_STALE","RETRIED","RETRIED_DNSSEC"])assert(queryOutcome(status)==="allowed","Allowed query status misclassified: "+status);
+                assert(queryOutcome("UNKNOWN")==="unknown" && queryOutcome("FUTURE_STATUS")==="unknown" && queryOutcome("IN_PROGRESS")==="pending","Unknown or pending query was shown as allowed");
+                const queryRow=key=>[...document.querySelectorAll("tbody tr[data-key]")].find(row=>row.dataset.key===key);
+                const allowedQuery=queryRow("1:1"),blockedQuery=queryRow("1:2");
+                assert(allowedQuery.dataset.queryOutcome==="allowed" && allowedQuery.querySelector(".query-result").textContent===t("allowed"),"Missing allowed query status");
+                assert(blockedQuery.dataset.queryOutcome==="blocked" && blockedQuery.querySelector(".query-result").textContent===t("blocked"),"Missing blocked query status");
+                assert(queryRow("2:2").dataset.queryOutcome==="blocked","Database-busy block was shown as allowed");
+                const originalTheme=document.documentElement.dataset.theme;
+                for(const theme of ["light","dark"]) {
+                    document.documentElement.dataset.theme=theme;
+                    assert(getComputedStyle(allowedQuery.cells[0]).backgroundColor!==getComputedStyle(blockedQuery.cells[0]).backgroundColor,"Allowed and blocked rows have identical colors in "+theme+" mode");
+                }
+                document.documentElement.dataset.theme=originalTheme;
+                const originalQueryRequest=window.nativeRequest;let releaseQueryAction;
+                const queryActionGate=new Promise(resolve=>releaseQueryAction=resolve);
+                window.nativeRequest=async(...args)=>{if(args[1].startsWith("/domains/") && args[2]==="POST")await queryActionGate;return originalQueryRequest(...args)};
+                allowedQuery.querySelector('[data-query-action="allow"]').click();
+                await wait(()=>queryRow("1:1").querySelector('[data-query-action="allow"]').disabled);
+                await state.page.refresh();
+                assert(queryRow("1:1")===allowedQuery && queryRow("1:1").querySelector('[data-query-action="deny"]').disabled,"Polling lost query action interlock or replaced the row");
+                releaseQueryAction();await wait(()=>!queryRow("1:1").querySelector('[data-query-action="allow"]').disabled);
+                window.nativeRequest=originalQueryRequest;
+                const queryDomains=async id=>JSON.parse((await nativeRequest(id,"/domains","GET","",false)).body).domains;
+                let queryRules=await queryDomains("1");
+                assert(queryRules.some(item=>item.domain==="example.com" && item.type==="allow" && item.kind==="exact" && item.enabled && item.groups[0]===0),"Query allow did not create an exact allow rule");
+                assert(!(await queryDomains("2")).some(item=>item.domain==="example.com"),"Query allow modified a different server");
+                await api(serverById("1"),"/domains/allow/exact/example.com",{method:"PUT",body:{comment:"existing query rule",groups:[3],enabled:false}});
+                queryRow("1:1").querySelector('[data-query-action="allow"]').click();await wait(()=>!queryRow("1:1").querySelector('[data-query-action="allow"]').disabled);
+                queryRules=await queryDomains("1");
+                assert(queryRules.filter(item=>item.domain==="example.com").length===1 && queryRules.find(item=>item.domain==="example.com").enabled,"Repeated query allow duplicated or failed to enable the existing rule");
+                queryRow("1:1").querySelector('[data-query-action="deny"]').click();await wait(()=>!queryRow("1:1").querySelector('[data-query-action="deny"]').disabled);
+                queryRules=await queryDomains("1");
+                const deniedQueryRule=queryRules.find(item=>item.domain==="example.com");
+                assert(deniedQueryRule.type==="deny" && deniedQueryRule.kind==="exact" && deniedQueryRule.comment==="existing query rule" && deniedQueryRule.groups[0]===3 && !queryRules.some(item=>item.domain==="example.com" && item.type==="allow"),"Query deny did not move the exact allow rule or preserve its metadata");
+                assert(queryRow("1:1").dataset.queryOutcome==="allowed","Saving a rule rewrote a historical query result");
+                await api(serverById("1"),"/domains/allow/exact",{method:"POST",body:{domain:["example.com"],type:"allow",kind:"exact",enabled:true,groups:[0]}});
+                queryRow("1:1").querySelector('[data-query-action="deny"]').click();await wait(()=>!queryRow("1:1").querySelector('[data-query-action="deny"]').disabled);
+                queryRules=await queryDomains("1");assert(queryRules.filter(item=>item.domain==="example.com").length===1 && queryRules.find(item=>item.domain==="example.com").type==="deny","Query deny retained a conflicting exact allow rule");
+                window.nativeRequest=async(...args)=>args[1].startsWith("/domains/") && args[2]==="POST" ? {status:200,body:'{"processed":{"errors":[{"error":"query rule rejected"}]}}'} : originalQueryRequest(...args);
+                queryRow("2:2").querySelector('[data-query-action="allow"]').click();await wait(()=>!queryRow("2:2").querySelector('[data-query-action="allow"]').disabled);
+                assert(document.getElementById("toastArea").textContent.includes("query rule rejected"),"Per-item query rule rejection was hidden");
+                assert(!(await queryDomains("2")).some(item=>item.domain==="older.example.com"),"Rejected query action changed the server");
+                window.nativeRequest=async(...args)=>{
+                    const result=await originalQueryRequest(...args);
+                    if(args[1].startsWith("/queries")) {
+                        const body=JSON.parse(result.body);
+                        for(const item of body.queries)if(item.id===1)item.status=args[0]==="1" ? "IN_PROGRESS" : "FUTURE_STATUS";
+                        result.body=JSON.stringify(body);
+                    }
+                    return result;
+                };
+                await state.page.refresh();
+                assert(queryRow("1:1").dataset.queryOutcome==="pending" && queryRow("1:1").querySelector(".query-result").textContent===t("queryPending"),"Pending row is not distinguished from allowed");
+                assert(queryRow("2:1").dataset.queryOutcome==="unknown" && queryRow("2:1").querySelector(".query-result").textContent===t("queryUnknown"),"Unknown row is not neutral");
+                window.nativeRequest=originalQueryRequest;await state.page.refresh();
+                assert(document.querySelector("[data-filter]")===queryFilter && queryFilter.value==="example.com" && document.querySelector("table")===queryTable,"Query actions reset the filter or table");
+                await api(serverById("1"),"/domains/deny/exact/example.com",{method:"DELETE"});
                 await switchTab("domains");
                 const domainForm=document.getElementById("recordForm"),domainTable=document.querySelector("table"),domainFilter=document.querySelector("[data-record-filter]");
                 const originalRows=[...document.querySelectorAll("tbody tr[data-key]")];
@@ -203,6 +268,41 @@ func TestNativeDesktop(t *testing.T) {
                 const firstPartial=JSON.parse((await nativeRequest("1","/domains","GET","",false)).body);
                 const secondPartial=JSON.parse((await nativeRequest("2","/domains","GET","",false)).body);
                 assert(firstPartial.domains.some(d=>d.domain==="reject.example") && !secondPartial.domains.some(d=>d.domain==="reject.example"),"Partial failure was not reflected per server");
+                const wildcard=document.querySelector("[data-domain-wildcard]"),domainKind=document.querySelector("[data-record-kind]"),domainType=document.querySelector("[data-record-type]"),addDomain=document.querySelector('#recordForm button[type="submit"]');
+                assert(!wildcard.checked && !wildcard.disabled,"Wildcard option must start unchecked");
+                wildcard.checked=true;
+                document.querySelector("[data-values]").value="wildcard.example\n*.another.example";
+                document.querySelector("[data-comment]").value="wildcard test";
+                domainForm.requestSubmit();await wait(()=>!addDomain.disabled);
+                const wildcardPatterns=["(\\.|^)wildcard\\.example$","(\\.|^)another\\.example$"];
+                for(const id of ["1","2"]) {
+                    const records=JSON.parse((await nativeRequest(id,"/domains","GET","",false)).body).domains;
+                    for(const pattern of wildcardPatterns)assert(records.some(d=>d.domain===pattern && d.kind==="regex" && d.type==="deny" && d.comment==="wildcard test" && d.groups[0]===0 && d.enabled),"Wildcard domain was not saved as a regex with metadata on every target");
+                    assert(!records.some(d=>d.kind==="exact" && ["wildcard.example","*.another.example"].includes(d.domain)),"Wildcard addition also created an exact entry");
+                }
+                const wildcardMatcher=new RegExp(wildcardPatterns[0],"i");
+                assert(["wildcard.example","ads.wildcard.example","a.b.wildcard.example"].every(value=>wildcardMatcher.test(value)),"Wildcard regex misses the base domain or nested subdomains");
+                assert(["notwildcard.example","wildcardXexample","wildcard.example.other"].every(value=>!wildcardMatcher.test(value)),"Wildcard regex matches outside the requested domain");
+                domainType.value="allow";document.querySelector("[data-values]").value="*.allowed.example";
+                domainForm.requestSubmit();await wait(()=>!addDomain.disabled);
+                for(const id of ["1","2"]) {
+                    const records=JSON.parse((await nativeRequest(id,"/domains","GET","",false)).body).domains;
+                    assert(records.some(d=>d.domain==="(\\.|^)allowed\\.example$" && d.kind==="regex" && d.type==="allow"),"Wildcard allow entry used the wrong API kind or list");
+                }
+                wildcard.checked=false;document.querySelector("[data-values]").value="plain.example";
+                domainForm.requestSubmit();await wait(()=>!addDomain.disabled);
+                wildcard.checked=true;domainKind.value="regex";domainKind.dispatchEvent(new Event("change"));
+                assert(!wildcard.checked && wildcard.disabled && document.querySelector(".wildcard-option").hidden,"Manual regex mode still enables wildcard conversion");
+                const manualPattern="^manual[0-9]+\\.example$";document.querySelector("[data-values]").value=manualPattern;
+                domainForm.requestSubmit();await wait(()=>!addDomain.disabled);
+                for(const id of ["1","2"]) {
+                    const records=JSON.parse((await nativeRequest(id,"/domains","GET","",false)).body).domains;
+                    assert(records.some(d=>d.domain==="plain.example" && d.kind==="exact" && d.type==="allow"),"Unchecked wildcard changed normal exact additions");
+                    assert(records.some(d=>d.domain===manualPattern && d.kind==="regex" && d.type==="allow"),"Manual regex was rewritten");
+                }
+                domainKind.value="exact";domainKind.dispatchEvent(new Event("change"));
+                assert(!wildcard.checked && !wildcard.disabled && !document.querySelector(".wildcard-option").hidden,"Returning to exact mode did not restore the wildcard option");
+                assert(document.getElementById("recordForm")===domainForm && document.querySelector("table")===domainTable && domainFilter.value==="example","Wildcard addition replaced the form or reset the filter");
                 await switchTab("lists");
                 const listForm=document.getElementById("recordForm"),listFilter=document.querySelector("[data-record-filter]");
                 listFilter.value="example.com";listFilter.dispatchEvent(new Event("input"));

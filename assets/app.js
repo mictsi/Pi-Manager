@@ -425,16 +425,40 @@ async function renderDashboard(container,page) {
     });
 }
 
+function queryOutcome(status) {
+    const value=String(status ?? "").toUpperCase().replace(/^QUERY_/,"");
+    if(["GRAVITY","REGEX","DENYLIST","EXTERNAL_BLOCKED_IP","EXTERNAL_BLOCKED_NULL","EXTERNAL_BLOCKED_NXRA","EXTERNAL_BLOCKED_EDE15","GRAVITY_CNAME","REGEX_CNAME","DENYLIST_CNAME","DBBUSY","SPECIAL_DOMAIN"].includes(value))return "blocked";
+    if(["FORWARDED","CACHE","CACHE_STALE","RETRIED","RETRIED_DNSSEC"].includes(value))return "allowed";
+    return value === "IN_PROGRESS" ? "pending" : "unknown";
+}
+function queryOutcomeLabel(outcome) { return t(outcome === "pending" ? "queryPending" : outcome === "unknown" ? "queryUnknown" : outcome); }
+function queryStatusIcon(outcome) {
+    const paths={allowed:'<circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/>',blocked:'<circle cx="12" cy="12" r="9"/><path d="m6 6 12 12"/>',pending:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',unknown:'<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 16h.01"/>'};
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[outcome] || paths.unknown}</svg>`;
+}
+function queryDomainName(query) {
+    const domain=String(query.domain || "").trim().replace(/\.$/,"");
+    return !domain || /^(?:hidden|\(hidden\))$/i.test(domain) || /[\s/<>]/.test(domain) ? "" : domain;
+}
+async function saveQueryDomainRule(server,domain,type) {
+    const data=await api(server,"/domains");
+    const exact=(data?.domains || []).filter(item=>item.kind === "exact" && item.domain.toLowerCase() === domain.toLowerCase());
+    const desired=exact.find(item=>item.type === type),opposite=exact.find(item=>item.type !== type),existing=desired || opposite;
+    if(existing) {
+        await api(server,recordDeletePath("domains",existing),{method:"PUT",body:{type,kind:"exact",enabled:true,comment:existing.comment || "",groups:existing.groups || [0]}});
+        if(desired && opposite)await api(server,recordDeletePath("domains",opposite),{method:"DELETE"});
+    } else await sendRecordRequest(server,recordCreateRequest("domains",{domain,type,kind:"exact",enabled:true,groups:[0],comment:"Added from Pi-Manager query log"}));
+}
 function statusLabel(status) {
     const value = String(status || "").toUpperCase();
     if (value === "FORWARDED") return t("forwarded");
     if (value.startsWith("CACHE")) return t("cache");
-    if (/GRAVITY|DENY|BLOCK|REGEX|SPECIAL_DOMAIN/.test(value)) return t("blocked");
+    if (queryOutcome(value) === "blocked") return t("blocked")+" · "+value;
     return value || "–";
 }
 async function renderQueries(container, page) {
     const model = {...{range:6,filter:"",server:"all",client:"all",type:"all",status:"all",pageSize:50,page:0,sort:"time",direction:-1},...preference("queries",{})};
-    const rows = new Map(), cursors = new Map(), clientNames = new Map(), latest = new Map();
+    const rows = new Map(), cursors = new Map(), clientNames = new Map(), latest = new Map(), changingDomains = new Set();
     let resetRequested = true, limited = false;
     const option = (value,label,selected) => `<option value="${escapeHtml(value)}" ${String(value) === String(selected) ? "selected" : ""}>${escapeHtml(label)}</option>`;
     container.innerHTML = `<div class="toolbar">
@@ -446,7 +470,7 @@ async function renderQueries(container, page) {
         <label>${textHTML("status")}<select data-status-filter></select></label>
         <label>${textHTML("perPage")}<select data-page-size>${[25,50,100,250,1000].map(n=>option(n,n,model.pageSize)).join("")}</select></label>
         <span class="spacer"></span>${refreshControls("queries")}
-        </div><div class="card"><div class="table-wrap queries-table"><table class="datatable"><thead><tr>${["time","server","client","domain","type","status"].map(key=>`<th data-sort="${key}" aria-sort="none">${textHTML(key)}</th>`).join("")}</tr></thead><tbody></tbody></table></div>
+        </div><div class="card"><p class="sub">${textHTML("queryActionsHelp")}</p><div class="table-wrap queries-table"><table class="datatable"><thead><tr>${["time","server","client","domain","type","queryResult","status"].map(key=>`<th data-sort="${key}" aria-sort="none">${textHTML(key)}</th>`).join("")}<th>${textHTML("actions")}</th></tr></thead><tbody></tbody></table></div>
         ${pagerHTML()}<button class="btn xs" data-load-more>${textHTML("loadMore")}</button><p class="sub" data-query-note></p></div>`;
     const tbody = $("tbody",container);
     function remember() { savePreference("queries",model); }
@@ -464,11 +488,16 @@ async function renderQueries(container, page) {
         const filter = model.filter.toLocaleLowerCase(localeCode());
         const cutoff = Date.now()/1000 - model.range*3600;
         const filtered = allRows.filter(q => q.time >= cutoff && (model.server === "all" || q.server.id === model.server) && (model.client === "all" || q.client?.ip === model.client) && (model.type === "all" || q.type === model.type) && (model.status === "all" || q.status === model.status) && (!filter || `${q.domain} ${q.client?.ip} ${q.client?.name} ${clientNames.get(q.client?.ip)||""}`.toLocaleLowerCase(localeCode()).includes(filter)));
-        const value = q => model.sort === "server" ? q.server.label : model.sort === "client" ? clientNames.get(q.client?.ip)||q.client?.name||q.client?.ip||"" : q[model.sort];
+        const value = q => model.sort === "queryResult" ? queryOutcome(q.status) : model.sort === "server" ? q.server.label : model.sort === "client" ? clientNames.get(q.client?.ip)||q.client?.name||q.client?.ip||"" : q[model.sort];
         filtered.sort((a,b) => model.direction * (model.sort === "time" ? a.time-b.time : String(value(a)||"").localeCompare(String(value(b)||""),localeCode(),{numeric:true})));
         updatePager(container,model,filtered.length);
         const visible = filtered.slice(model.page*model.pageSize,(model.page+1)*model.pageSize);
-        reconcileRows(tbody,visible.map(q=>({key:q._key,html:`<td>${escapeHtml(new Date(q.time*1000).toLocaleString(localeCode()))}</td><td><span class="server-chip s${q.server.id}">${escapeHtml(q.server.label)}</span></td><td title="${escapeHtml(q.client?.ip)}">${escapeHtml(clientNames.get(q.client?.ip)||q.client?.name||q.client?.ip||"–")}</td><td class="mono">${escapeHtml(q.domain)}</td><td>${escapeHtml(q.type)}</td><td title="${escapeHtml(q.status)}">${escapeHtml(statusLabel(q.status))}</td>`})));
+        reconcileRows(tbody,visible.map(q=>{
+            const outcome=queryOutcome(q.status),domain=queryDomainName(q),busy=changingDomains.has(q.server.id+":"+domain.toLowerCase());
+            const actions=["allow","deny"].map(action=>`<button class="btn xs query-${action}" data-query-action="${action}" title="${textHTML("queryDomainAction",{action:t(action),domain:domain || q.domain,server:q.server.label})}" aria-label="${textHTML("queryDomainAction",{action:t(action),domain:domain || q.domain,server:q.server.label})}" ${!domain || !q.server.connected || busy ? "disabled" : ""}>${queryStatusIcon(action === "allow" ? "allowed" : "blocked")}${textHTML(action)}</button>`).join("");
+            return {key:q._key,html:`<td>${escapeHtml(new Date(q.time*1000).toLocaleString(localeCode()))}</td><td><span class="server-chip s${q.server.id}">${escapeHtml(q.server.label)}</span></td><td title="${escapeHtml(q.client?.ip)}">${escapeHtml(clientNames.get(q.client?.ip)||q.client?.name||q.client?.ip||"–")}</td><td class="mono query-domain">${escapeHtml(q.domain)}</td><td>${escapeHtml(q.type)}</td><td><span class="query-result">${queryStatusIcon(outcome)}${escapeHtml(queryOutcomeLabel(outcome))}</span></td><td title="${escapeHtml(q.status)}">${escapeHtml(statusLabel(q.status))}</td><td><div class="query-domain-actions">${actions}</div></td>`};
+        }));
+        for(const row of $$("tr[data-key]",tbody))row.dataset.queryOutcome=queryOutcome(rows.get(row.dataset.key).status);
         $("[data-load-more]",container).disabled = ![...cursors.values()].some(c=>c?.cursor != null && c.cursor !== 0 && c.cursor !== "");
         for (const th of $$("[data-sort]",container)) th.setAttribute("aria-sort",th.dataset.sort === model.sort ? model.direction === 1 ? "ascending" : "descending" : "none");
         $("[data-query-note]",container).textContent = limited ? t("queryLimit") : state.servers.some(s=>s.connected) ? filtered.length ? "" : t("noMatches") : t("loginRequired");
@@ -486,6 +515,18 @@ async function renderQueries(container, page) {
             limited=true;
         }
     }
+    tbody.onclick=async event=>{
+        const button=event.target.closest("[data-query-action]");if(!button || button.disabled)return;
+        const query=rows.get(button.closest("tr[data-key]").dataset.key);if(!query)return;
+        const domain=queryDomainName(query),type=button.dataset.queryAction,key=query.server.id+":"+domain.toLowerCase();
+        if(!domain || !query.server.connected || changingDomains.has(key))return;
+        changingDomains.add(key);draw();
+        try {
+            await saveQueryDomainRule(query.server,domain,type);
+            toast(t(type === "allow" ? "queryAllowSaved" : "queryDenySaved",{domain,server:query.server.label}),"ok");
+        }catch(error){showError(error);}
+        finally {changingDomains.delete(key);draw();}
+    };
     for (const [selector,key] of [["[data-filter]","filter"],["[data-server-filter]","server"],["[data-client-filter]","client"],["[data-type-filter]","type"],["[data-status-filter]","status"],["[data-page-size]","pageSize"]]) {
         $(selector,container).addEventListener(key === "filter" ? "input" : "change",event=>{
             model[key] = key === "pageSize" ? Number(event.target.value) : event.target.value;
@@ -591,6 +632,9 @@ function validIPAddress(value) {
     if (!value.includes(":")) return false;
     try {new URL("http://["+value+"]/");return true;} catch {return false;}
 }
+function wildcardDomain(value) {
+    return "(\\.|^)"+value.replace(/^\*\./,"").replace(/\./g,"\\.")+"$";
+}
 async function sendRecordRequest(server, request) { return api(server,request.path,request); }
 async function replaceDNS(server, existing, next) {
     await api(server,recordDeletePath("hosts",existing),{method:"DELETE"});
@@ -613,7 +657,8 @@ async function renderRecords(container, page, kind) {
         ${toggleable ? field("type",`<select data-record-type>${options(kind === "domains" ? [["deny","deny"],["allow","allow"]] : [["block","deny"],["allow","allow"]],kind === "domains" ? "deny" : "block")}</select>`) : ""}
         ${kind === "domains" ? field("kind",`<select data-record-kind>${options([["exact","exact"],["regex","regex"]],"exact")}</select>`) : ""}
         ${kind !== "hosts" ? field("comment",'<input type="text" data-comment>') : ""}
-        <button class="btn primary" type="submit">${textHTML("add")}</button></form>
+        <button class="btn primary" type="submit">${textHTML("add")}</button>
+        ${kind === "domains" ? `<div class="wildcard-option"><label><input type="checkbox" data-domain-wildcard aria-describedby="domainWildcardHelp"><span>${textHTML("addDomainWildcard")}</span></label><p class="sub" id="domainWildcardHelp">${textHTML("domainWildcardHelp")}</p></div>` : ""}</form>
         <div style="margin-top:12px">${targetPicker(model.targets)}</div>
         <div class="resource-sync"><p class="sub">${textHTML("syncResourceHelp")}</p><div class="toolbar"><button class="btn" data-sync-secondaries>${textHTML("syncSecondaries")}</button><span class="status-line" role="status" data-record-sync-status></span></div><p class="sub sync-errors" role="alert" data-record-sync-errors></p></div></div>
         <div class="card" style="margin-top:14px"><div class="toolbar"><label>${textHTML("filter")}<input type="text" data-record-filter value="${escapeHtml(model.filter)}" placeholder="${textHTML("filterHint")}"></label>
@@ -765,7 +810,10 @@ async function renderRecords(container, page, kind) {
         const items = values.map(value=>{
             if (kind === "hosts") {const [ip,...names]=value.split(/\s+/);return {ip,name:names.join(" "),raw:ip+" "+names.join(" ")};}
             const common = {comment:$("[data-comment]",container).value.trim(),groups:[0],enabled:true};
-            if (kind === "domains") return {...common,domain:value,type:$("[data-record-type]",container).value,kind:$("[data-record-kind]",container).value};
+            if (kind === "domains") {
+                const wildcard=$("[data-domain-wildcard]",container).checked && $("[data-record-kind]",container).value === "exact";
+                return {...common,domain:wildcard ? wildcardDomain(value) : value,type:$("[data-record-type]",container).value,kind:wildcard ? "regex" : $("[data-record-kind]",container).value};
+            }
             if (kind === "lists") return {...common,address:value,type:$("[data-record-type]",container).value};
             return {...common,client:value};
         });
@@ -774,6 +822,12 @@ async function renderRecords(container, page, kind) {
             for (const server of targets) for (const item of items) await execute(server,()=>sendRecordRequest(server,recordCreateRequest(kind,item)));
         });
         // Keep the form, filter, selection, sorting and scroll position intact.
+    };
+    if(kind === "domains")$("[data-record-kind]",container).onchange=event=>{
+        const manualRegex=event.target.value === "regex",wildcard=$("[data-domain-wildcard]",container);
+        if(manualRegex)wildcard.checked=false;
+        wildcard.disabled=manualRegex;
+        $(".wildcard-option",container).hidden=manualRegex;
     };
     $("[data-record-filter]",container).oninput=event=>{model.filter=event.target.value;model.page=0;remember();draw();};
     $("[data-record-size]",container).onchange=event=>{model.pageSize=Number(event.target.value);model.page=0;remember();draw();};
