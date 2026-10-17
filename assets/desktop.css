@@ -38,6 +38,11 @@ header.topbar { padding:12px 16px; }
 .login-form { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
 .login-form input { flex:1; min-width:140px; }
 .status-line { min-height:20px; color:var(--muted); font-size:12px; }
+.resource-sync { margin-top:16px; padding-top:12px; border-top:1px solid var(--border); }
+.gravity-actions { margin-bottom:14px; }
+.resource-sync .btn,.gravity-actions .btn { max-width:100%; white-space:normal; text-align:left; }
+.resource-sync .toolbar,.gravity-actions .toolbar { margin-bottom:0; }
+.sync-errors { white-space:pre-line; overflow-wrap:anywhere; }
 .count-note { font-size:12px; color:var(--muted); }
 .pager { display:flex; gap:10px; justify-content:flex-end; align-items:center; padding-top:10px; }
 .log { white-space:pre-wrap; overflow:auto; max-height:60vh; }

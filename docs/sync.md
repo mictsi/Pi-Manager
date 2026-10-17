@@ -2,6 +2,12 @@
 
 [Documentation](../README.md#documentation)
 
+For a quick resource sync, use **Sync secondaries from main** in Domains, Local
+DNS, Clients or Lists. It applies missing and changed entries to the secondary
+targets you selected after confirmation, preserving secondary-only entries.
+Conflicts and unavailable servers are reported. For individual change selection
+or mirror deletions, use the drift workflow below.
+
 1. In **Settings**, confirm the correct server is **Main**. Sync always flows
    from that server to the selected secondaries.
 2. Open **Display drift**. Choose secondary servers and resource types: domains,

@@ -28,9 +28,17 @@ narrow the records. Add, enable, disable and delete controls appear where
 supported by that resource. Only the affected table content updates after an
 action, preserving the surrounding view.
 
+Each record view also offers **Sync secondaries from main**. Choose secondary
+targets, then confirm the change count to add missing entries and update changed
+entries for that resource. Secondary-only entries are kept. Use **Display drift**
+when you want to select individual changes or remove secondary-only entries.
+
 The Local DNS editor manages host/IP records. Drift comparison and sync also
 cover CNAME records exposed by the Pi-hole configuration API. **Gravity** starts
-list database updates on the chosen servers and shows their output.
+list database updates on individual servers and shows their output. **Update
+gravity on all servers** starts every connected server together, skipping any
+already updating. The status line shows ready, running and logged-out servers;
+each server keeps its own progress log.
 
 ## Tray and health monitoring
 

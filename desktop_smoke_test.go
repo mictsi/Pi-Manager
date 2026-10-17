@@ -81,6 +81,8 @@ func TestNativeDesktop(t *testing.T) {
                     for (const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift","settings"]) {
                         await switchTab(tab);
                         assert(document.documentElement.lang===language,"Wrong document language");
+                        if(["domains","hosts","clients","lists"].includes(tab))assert(document.querySelector("[data-sync-secondaries]")?.textContent===t("syncSecondaries"),"Missing translated resource sync action");
+                        if(tab === "gravity")assert(document.querySelector("[data-gravity-all]")?.textContent===t("updateGravityAll"),"Missing translated all-server Gravity action");
                         assert(document.title==="Pi-Manager" && document.querySelector("header h1").textContent.startsWith("Pi-Manager"),"App branding changed during translation");
                         if(tab!=="dashboard")assert(document.querySelector(".view-heading") && document.querySelector(".view-icon svg"),"Missing workspace styling: "+tab);
                         assert(document.querySelector("#tabs [data-tab=queries]").textContent===t("queries"),"Tab was not translated");
@@ -219,10 +221,77 @@ func TestNativeDesktop(t *testing.T) {
                 await wait(()=>document.getElementById("toastArea").textContent.includes(t("restored")));
                 const dns=JSON.parse((await nativeRequest("1","/config/dns/hosts","GET","",false)).body);
                 assert(dns.config.dns.hosts.includes("192.168.1.3 nas.home"),"DNS rollback did not restore the original value");
+                const quickCases=[
+                    {kind:"domains",source:{domain:"quick.example",type:"deny",kind:"exact",comment:"from main",groups:[3],enabled:false},extra:{domain:"secondary-only.example",type:"deny",kind:"exact",groups:[0]}},
+                    {kind:"hosts",source:{ip:"192.168.1.70",name:"quick.home",raw:"192.168.1.70 quick.home"},extra:{ip:"192.168.1.71",name:"secondary-only.home",raw:"192.168.1.71 secondary-only.home"}},
+                    {kind:"clients",source:{client:"192.168.1.80",comment:"from main",groups:[3]},extra:{client:"192.168.1.81",comment:"secondary only",groups:[0]}},
+                    {kind:"lists",source:{address:"https://example.com/quick",type:"block",comment:"from main",groups:[3],enabled:false},extra:{address:"https://example.com/secondary-only",type:"block",groups:[0]}}
+                ];
+                for(const {kind,source,extra} of quickCases) {
+                    await sendRecordRequest(serverById("2"),recordCreateRequest(kind,extra));
+                    if(kind === "hosts") {
+                        const before=recordItems(kind,await api(serverById("2"),RECORD_PATHS[kind])).find(item=>item.name==="nas.home");
+                        await api(serverById("2"),recordDeletePath(kind,before),{method:"DELETE"});
+                        await api(serverById("2"),"/config/dns/hosts/"+encodeURIComponent("192.168.1.72 nas.home"),{method:"PUT"});
+                    }
+                    if(kind === "clients")await api(serverById("2"),"/clients/192.168.1.50",{method:"PUT",body:{comment:"secondary drift",groups:[0]}});
+                    await switchTab(kind);
+                    // Simulate a main-server edit made outside this open view.
+                    await sendRecordRequest(serverById("1"),recordCreateRequest(kind,source));
+                    const syncButton=document.querySelector("[data-sync-secondaries]"),form=document.getElementById("recordForm"),table=document.querySelector("table"),filter=document.querySelector("[data-record-filter]");
+                    const filterValue=kind === "clients" ? "192.168.1.80" : "quick";
+                    filter.value=filterValue;filter.dispatchEvent(new Event("input"));
+                    const target=document.querySelector('[data-target="2"]');target.checked=false;target.dispatchEvent(new Event("change"));
+                    assert(syncButton.disabled,"Resource sync accepted no selected secondaries");
+                    target.checked=true;target.dispatchEvent(new Event("change"));
+                    assert(!syncButton.disabled,"Resource sync ignored selected secondary");
+                    window.confirm=()=>false;syncButton.click();
+                    await wait(()=>!syncButton.disabled && document.querySelector("[data-record-sync-status]").textContent===t("syncCancelled"));
+                    let secondary=recordItems(kind,await api(serverById("2"),RECORD_PATHS[kind]));
+                    assert(!secondary.some(item=>recordKey(kind,item)===recordKey(kind,source)),"Cancelling resource sync mutated the secondary");
+                    const originalPreview=window.nativePreviewSync;let previewArgs,confirmation;
+                    window.nativePreviewSync=(...args)=>{previewArgs=args;return originalPreview(...args)};
+                    window.confirm=message=>{confirmation=message;return true};
+                    syncButton.click();await wait(()=>!syncButton.disabled && document.querySelector("[data-record-sync-status]").textContent.startsWith("Applied:"));
+                    window.nativePreviewSync=originalPreview;
+                    assert(JSON.stringify(previewArgs)==='[["2"],["'+kind+'"],false]',"Resource sync scope included another resource, main target, or mirror deletions");
+                    assert(confirmation.includes("One") && confirmation.includes("Two") && confirmation.includes(t(kind)),"Resource sync confirmation omits direction or resource");
+                    secondary=recordItems(kind,await api(serverById("2"),RECORD_PATHS[kind]));
+                    const copied=secondary.find(item=>recordKey(kind,item)===recordKey(kind,source));
+                    assert(copied && (kind === "hosts" ? copied.ip===source.ip : copied.comment===source.comment && copied.groups[0]===3),"Resource sync did not copy main values and group assignments: "+kind);
+                    assert(secondary.some(item=>recordKey(kind,item)===recordKey(kind,extra)),"Resource sync deleted a secondary-only entry");
+                    if(kind === "clients")assert(secondary.find(item=>item.client==="192.168.1.50").comment==="Desktop","Resource sync did not update a changed client");
+                    assert(document.getElementById("recordForm")===form && document.querySelector("table")===table && filter.value===filterValue,"Resource sync replaced the page or reset the filter");
+                    const copiedRow=[...document.querySelectorAll("tbody tr[data-key]")].find(row=>row.dataset.key===recordKey(kind,source));
+                    assert(copiedRow && !copiedRow.querySelector('[data-record-server="1"]').textContent.includes(t("missing")),"Resource sync left stale main-server values in the table: "+kind);
+                    if(kind === "domains")assert(document.querySelector("[data-record-sync-errors]").textContent.includes("simulated partial failure"),"Resource sync concealed a partial failure");
+                    if(kind === "hosts")assert(secondary.find(item=>item.name==="nas.home").ip==="192.168.1.3","Resource sync did not replace changed DNS values");
+                }
                 await switchTab("gravity");
                 document.getElementById("gravBtn1").click();
                 await wait(()=>document.getElementById("gravLog1").textContent.includes("Gravity complete ✓"));
                 await wait(()=>!gravityState.get("1").running);
+                const originalRequest=window.nativeRequest,gravityCalls=[];
+                let releaseGravity;
+                const gravityGate=new Promise(resolve=>releaseGravity=resolve);
+                window.nativeRequest=async(...args)=>{if(args[1].startsWith("/action/gravity")){gravityCalls.push(args[0]);await gravityGate;}return originalRequest(...args)};
+                document.getElementById("gravBtn1").click();
+                document.querySelector("[data-gravity-all]").click();
+                assert(gravityCalls.join(",")==="1,2" && document.querySelector("[data-gravity-all]").disabled,"All-server Gravity missed a server or restarted a running update");
+                await switchTab("dashboard");releaseGravity();
+                await wait(()=>!gravityState.get("1").running && !gravityState.get("2").running);
+                await switchTab("gravity");
+                assert(["1","2"].every(id=>document.getElementById("gravLog"+id).textContent.includes("Gravity complete ✓")),"All-server Gravity lost per-host logs after switching views");
+                window.nativeRequest=async(...args)=>{if(args[1].startsWith("/action/gravity")){gravityCalls.push(args[0]);if(args[0]==="1")return {status:500};}return originalRequest(...args)};
+                state.servers[1].connected=false;await state.page.refresh();
+                document.querySelector("[data-gravity-all]").click();
+                await wait(()=>!gravityState.get("1").running);
+                assert(gravityCalls.join(",")==="1,2,1" && document.getElementById("gravLog1").textContent.includes("500"),"All-server Gravity ran a logged-out host or concealed an error");
+                state.servers[1].connected=true;await state.page.refresh();
+                document.querySelector("[data-gravity-all]").click();
+                await wait(()=>!gravityState.get("1").running && !gravityState.get("2").running);
+                assert(gravityCalls.join(",")==="1,2,1,1,2" && document.getElementById("gravLog2").textContent.includes("Gravity complete ✓"),"A failed Gravity update prevented another host from completing");
+                window.nativeRequest=originalRequest;
                 await switchTab("settings");
                 document.querySelector('[data-server="1"] [data-name]').value="Updated desktop name";
                 document.getElementById("desktopSettings").requestSubmit();
@@ -243,7 +312,7 @@ func TestNativeDesktop(t *testing.T) {
                 try {await fetch("/api10/auth");throw new Error("Unconfigured host 10 accepted")}catch(error){assert(error.message.includes("Settings"),"Transport did not route server ID 10")}
                 for(const width of [400,650,1000]) {
                     await smokeResize(width,1000);await wait(()=>Math.abs(innerWidth-width)<5);
-                    for(const tab of ["settings","dashboard","queries","domains","hosts","clients","lists","drift"]) {
+                    for(const tab of ["settings","dashboard","queries","domains","hosts","clients","lists","gravity","drift"]) {
                         await switchTab(tab);
                         const main=document.getElementById("tabContent"),header=document.querySelector("header");
                         assert(main.scrollWidth<=innerWidth+1,"Page overflow at "+width+"/"+tab+": "+main.scrollWidth);

@@ -614,7 +614,8 @@ async function renderRecords(container, page, kind) {
         ${kind === "domains" ? field("kind",`<select data-record-kind>${options([["exact","exact"],["regex","regex"]],"exact")}</select>`) : ""}
         ${kind !== "hosts" ? field("comment",'<input type="text" data-comment>') : ""}
         <button class="btn primary" type="submit">${textHTML("add")}</button></form>
-        <div style="margin-top:12px">${targetPicker(model.targets)}</div></div>
+        <div style="margin-top:12px">${targetPicker(model.targets)}</div>
+        <div class="resource-sync"><p class="sub">${textHTML("syncResourceHelp")}</p><div class="toolbar"><button class="btn" data-sync-secondaries>${textHTML("syncSecondaries")}</button><span class="status-line" role="status" data-record-sync-status></span></div><p class="sub sync-errors" role="alert" data-record-sync-errors></p></div></div>
         <div class="card" style="margin-top:14px"><div class="toolbar"><label>${textHTML("filter")}<input type="text" data-record-filter value="${escapeHtml(model.filter)}" placeholder="${textHTML("filterHint")}"></label>
         <label>${textHTML("perPage")}<select data-record-size>${[25,50,100,250,1000].map(n=>`<option value="${n}" ${n === model.pageSize ? "selected" : ""}>${n}</option>`).join("")}</select></label><button class="btn" data-refresh-records>${textHTML("refresh")}</button><span class="status-line" data-record-status></span></div>
         <div class="bulk-toolbar"><span data-selected>${textHTML("selected",{n:0})}</span><button class="btn xs" data-bulk="clear">${textHTML("clearSelection")}</button>
@@ -670,6 +671,7 @@ async function renderRecords(container, page, kind) {
         all.indeterminate = visible.some(row=>selected.has(row.key)) && !all.checked;
         $("[data-selected]",container).textContent = t("selected",{n:selected.size});
         for (const button of $$("[data-bulk]",container)) button.disabled = working || selected.size === 0;
+        $("[data-sync-secondaries]",container).disabled=working || !state.servers.some(s=>s.role === "main" && s.url) || !selectedTargets(container).some(s=>s.role === "secondary" && s.url);
         for (const th of $$("[data-sort]",container)) th.setAttribute("aria-sort",th.dataset.sort === model.sort ? model.direction === 1 ? "ascending" : "descending" : "none");
     }
     async function loadServers(servers) {
@@ -724,6 +726,36 @@ async function renderRecords(container, page, kind) {
             }
         });
     }
+    $("[data-sync-secondaries]",container).onclick=async()=>{
+        if(working)return;
+        const main=state.servers.find(s=>s.role === "main"),targets=selectedTargets(container).filter(s=>s.role === "secondary" && s.url);
+        if(!main || !targets.length)return;
+        const status=$("[data-record-sync-status]",container),errors=$("[data-record-sync-errors]",container);
+        working=true;status.textContent=t("loading");errors.textContent="";
+        for(const control of $$("button,[data-target]",container))control.disabled=true;
+        try {
+            const plan=await nativePreviewSync(targets.map(s=>s.id),[kind],false);
+            if(!page.active)return;
+            const changes=plan.rows.filter(row=>row.status === "missing" || row.status === "changed");
+            const problems=plan.rows.filter(row=>row.status === "conflict" || row.status === "unavailable").map(row=>`${serverById(row.serverId)?.label || row.serverId}: ${row.problem || t("drift_"+row.status)}`);
+            errors.textContent=problems.join("\n");status.textContent=t("syncSummary",plan);
+            if(!changes.length)return;
+            if(!window.confirm(t("syncResourceConfirm",{n:changes.length,resource:t(kind),main:main.label,servers:targets.map(s=>s.label).join(", "),conflicts:plan.conflicts})+"\n"+t("upsertMode"))){status.textContent=t("syncCancelled");return;}
+            if(!page.active)return;
+            status.textContent=t("loading");
+            const result=await nativeApplySync(plan.token,changes.map(row=>row.id));
+            if(!page.active)return;
+            status.textContent=t("syncDone",result);
+            errors.textContent=[...problems,...result.errors].join("\n");
+            toast(t("syncDone",result),result.failed || problems.length ? "err" : "ok");
+            await loadServers([main,...targets]);
+            if(kind === "clients")await loadSuggestions();
+        }catch(error){if(page.active){status.textContent=humanError(error);showError(error);}}
+        finally {
+            working=false;
+            if(page.active){for(const control of $$("button,[data-target]",container))control.disabled=false;draw();}
+        }
+    };
     $("#recordForm",container).onsubmit = async event => {
         event.preventDefault();
         const values = [...new Set($("[data-values]",container).value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean))];
@@ -746,7 +778,7 @@ async function renderRecords(container, page, kind) {
     $("[data-record-filter]",container).oninput=event=>{model.filter=event.target.value;model.page=0;remember();draw();};
     $("[data-record-size]",container).onchange=event=>{model.pageSize=Number(event.target.value);model.page=0;remember();draw();};
     for (const [selector,delta] of [["[data-previous]",-1],["[data-next]",1]]) $(selector,container).onclick=()=>{model.page+=delta;remember();draw();};
-    for (const input of $$("[data-target]",container)) input.onchange=()=>{model.targets=selectedTargets(container).map(s=>s.id);remember();};
+    for (const input of $$("[data-target]",container)) input.onchange=()=>{model.targets=selectedTargets(container).map(s=>s.id);remember();draw();};
     $("[data-select-all]",container).onchange=event=>{for (const row of visible) if (event.target.checked) selected.add(row.key);else selected.delete(row.key);draw();};
     tbody.onchange=event=>{if (event.target.matches("[data-select]")) {const key=event.target.closest("tr").dataset.key;if (event.target.checked) selected.add(key);else selected.delete(key);draw();}};
     container.addEventListener("click",async event=>{
@@ -944,7 +976,7 @@ async function renderSettings(container, page) {
 
 const gravityState = new Map();
 async function renderGravity(container, page) {
-    container.innerHTML=`<div class="server-grid">${state.servers.map(s=>`<div class="card"><h2>${escapeHtml(s.label)} · ${textHTML("gravity")}</h2><div class="stat-row"><span class="k">${textHTML("lastGravity")}</span><span id="gravLast${s.id}">–</span></div>
+    container.innerHTML=`<div class="card gravity-actions"><div class="toolbar"><button class="btn primary" data-gravity-all>${textHTML("updateGravityAll")}</button><span class="status-line" role="status" data-gravity-all-status></span></div><p class="sub">${textHTML("gravityAllHelp")}</p></div><div class="server-grid">${state.servers.map(s=>`<div class="card"><h2>${escapeHtml(s.label)} · ${textHTML("gravity")}</h2><div class="stat-row"><span class="k">${textHTML("lastGravity")}</span><span id="gravLast${s.id}">–</span></div>
         ${s.connected ? "" : loginHTML(s)}<button class="btn primary block" id="gravBtn${s.id}" ${!s.connected || gravityState.get(s.id)?.running ? "disabled" : ""}>${textHTML(gravityState.get(s.id)?.running ? "running" : "updateGravity")}</button><pre class="log" id="gravLog${s.id}" style="margin-top:12px"></pre></div>`).join("")}</div>`;
     function drawLog(server) {
         if (!page.active) return;
@@ -955,6 +987,13 @@ async function renderGravity(container, page) {
         const button=document.getElementById("gravBtn"+server.id);
         button.disabled=!server.connected || !!value?.running;button.textContent=t(value?.running ? "running" : "updateGravity");
         if (server.connected) $(`[data-loginform="${server.id}"]`,container)?.remove();
+        drawAllButton();
+    }
+    function drawAllButton() {
+        if(!page.active)return;
+        const configured=state.servers.filter(s=>s.url),running=configured.filter(s=>gravityState.get(s.id)?.running).length,ready=configured.filter(s=>s.connected && !gravityState.get(s.id)?.running).length;
+        $("[data-gravity-all]",container).disabled=!ready;
+        $("[data-gravity-all-status]",container).textContent=t("gravityAllStatus",{ready,running,unavailable:configured.filter(s=>!s.connected).length});
     }
     const onProgress = event => {
         const server=serverById(event.detail.id);
@@ -972,27 +1011,28 @@ async function renderGravity(container, page) {
         }));
     };
     bindLogins(container,page);
-    for (const server of state.servers) {
-        document.getElementById("gravBtn"+server.id).onclick=async()=>{
-            const value={running:true,text:""};gravityState.set(server.id,value);notify(server);
-            let stream;
-            try {
-                const r=await nativeRequest(server.id,"/action/gravity?color=false","POST","",true);
-                if (r.status < 200 || r.status >= 300) throw new Error("HTTP "+r.status);
-                stream=r.stream;
-                const decoder=new TextDecoder();
-                for (;;) {
-                    const chunk=await nativeReadStream(stream);
-                    value.text+=decoder.decode(Uint8Array.from(atob(chunk.data),c=>c.charCodeAt(0)),{stream:!chunk.done});
-                    value.text=value.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g,"").slice(-2*1024*1024);
-                    notify(server);
-                    if (chunk.done) break;
-                }
-                value.text+="\n— "+t("finished")+" —";
-            } catch (error) {value.text+="\n"+humanError(error);}
-            finally {if (stream) {try {await nativeCancelStream(stream);} catch { /* The application may already be shutting down. */ }}value.running=false;notify(server);if (page.active) await page.refresh();}
-        };
+    async function startGravity(server) {
+        if(!server.connected || gravityState.get(server.id)?.running)return;
+        const value={running:true,text:""};gravityState.set(server.id,value);notify(server);
+        let stream;
+        try {
+            const r=await nativeRequest(server.id,"/action/gravity?color=false","POST","",true);
+            if (r.status < 200 || r.status >= 300) throw new Error("HTTP "+r.status);
+            stream=r.stream;
+            const decoder=new TextDecoder();
+            for (;;) {
+                const chunk=await nativeReadStream(stream);
+                value.text+=decoder.decode(Uint8Array.from(atob(chunk.data),c=>c.charCodeAt(0)),{stream:!chunk.done});
+                value.text=value.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g,"").slice(-2*1024*1024);
+                notify(server);
+                if (chunk.done) break;
+            }
+            value.text+="\n— "+t("finished")+" —";
+        } catch (error) {value.text+="\n"+humanError(error);}
+        finally {if (stream) {try {await nativeCancelStream(stream);} catch { /* The application may already be shutting down. */ }}value.running=false;notify(server);if (page.active) await page.refresh();}
     }
+    for (const server of state.servers) document.getElementById("gravBtn"+server.id).onclick=()=>startGravity(server);
+    $("[data-gravity-all]",container).onclick=()=>Promise.all(state.servers.filter(s=>s.url).map(startGravity));
     await page.refresh();
 }
 
