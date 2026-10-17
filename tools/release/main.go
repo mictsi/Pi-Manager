@@ -66,6 +66,17 @@ func release(input, output, version string) error {
 			for _, name := range []string{"README.md", "LICENSE", "config.example.json", "assets/THIRD_PARTY.txt", "assets/icon.svg"} {
 				entries = append(entries, entry{name, base + "/" + name})
 			}
+			if err := filepath.WalkDir("docs", func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if !d.IsDir() {
+					entries = append(entries, entry{path, base + "/" + filepath.ToSlash(path)})
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
 			ext := ".tar.gz"
 			if platform == "windows" {
 				ext = ".zip"
