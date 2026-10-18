@@ -40,6 +40,8 @@ window minimization available.
 4. Save. The app attempts to connect using the saved passwords. Use the server's
    login form in **Settings** if it needs authentication.
 
+![Settings showing sample Home and Office servers with Main and Secondary roles, API URLs, saved passwords and Save and reconnect](images/settings.png)
+
 Server setup and login controls are available only in **Settings**. Other views
 show a **Go to Settings** message for unconfigured or disconnected servers. The
 button opens Settings and focuses the relevant server's URL or password field.

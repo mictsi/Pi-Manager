@@ -21,6 +21,11 @@ or mirror deletions, use the drift workflow below.
 6. Click **Apply selected changes** and confirm. Only selected changes apply.
    Even in mirror mode, deletions require selecting the secondary-only rows.
 
+![Drift preview with a selected Local DNS difference between Home and Office and the Sync selected action](images/drift.png)
+
+The sample preview selects the different `nas.home` address on Office for sync
+from Home. The checkbox and selection count identify exactly what will apply.
+
 A preview does not modify servers. Group assignments are matched by group name
 rather than numeric IDs. If configuration changes after a preview, create a new
 preview before applying again. Errors are reported per operation. Sync covers

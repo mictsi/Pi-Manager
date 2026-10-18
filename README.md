@@ -20,6 +20,10 @@ and to the [Pi-hole project](https://pi-hole.net/) and its community.
 The interface uses the [Sekura Design System](https://apps.tsiortos.com/sekuradesign)
 for shared styles, themes and accessible interactions.
 
+![Pi-Manager dashboard with two connected servers, combined metrics, blocklist drift warning, and dashboard tabs](docs/images/dashboard.png)
+
+*The native app in dense mode, shown with illustrative server data.*
+
 ## Features
 
 - **A fleet-wide dashboard.** Combined query statistics, blocking trends and
@@ -47,7 +51,10 @@ operating system and processor: Windows, Linux or macOS, on amd64 or ARM64.
 ## Documentation
 
 - [Getting started](docs/getting-started.md): installation and server setup.
-- [Using Pi-Manager](docs/using-pi-manager.md): dashboards, queries, records and tray.
+- [Using Pi-Manager](docs/using-pi-manager.md): navigation, appearance and tray.
+- [Dashboard](docs/dashboard.md): metrics, host filters and chart tabs.
+- [Queries](docs/queries.md): live queries, filters and domain actions.
+- [Managing records](docs/records.md): domains, local DNS, clients, lists and Gravity.
 - [Drift and sync](docs/sync.md): inspect differences and apply selected changes.
 - [Configuration and logs](docs/configuration.md): saved settings, logging and upgrades.
 - [Building](docs/building.md): local builds, cross-platform artifacts and tests.
