@@ -33,6 +33,7 @@ func desktopTestApp(t *testing.T) *App {
 		}
 		hosts[host] = []string{fmt.Sprintf("192.168.1.%d nas.home", index+3)}
 	}
+	blockingStates := map[string]string{}
 	summaryCalls := 0
 	response := func(status int, data any) *http.Response {
 		b, _ := json.Marshal(data)
@@ -87,7 +88,17 @@ func desktopTestApp(t *testing.T) *App {
 			return jsonResponse(200, `{"sensors":{"cpu_temp":48.5,"unit":"C"}}`), nil
 		}
 		if path == "/api/dns/blocking" {
-			return jsonResponse(200, `{"blocking":"enabled"}`), nil
+			if r.Method == http.MethodPost {
+				blockingStates[host] = "disabled"
+				if body["blocking"] == true {
+					blockingStates[host] = "enabled"
+				}
+			}
+			value := blockingStates[host]
+			if value == "" {
+				value = "enabled"
+			}
+			return response(200, map[string]string{"blocking": value}), nil
 		}
 		if path == "/api/config/dns/cnameRecords" {
 			return response(200, map[string]any{"config": map[string]any{"dns": map[string]any{"cnameRecords": cnames[host]}}}), nil

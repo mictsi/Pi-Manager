@@ -285,7 +285,7 @@ function renderViewChrome(container,tab) {
 function refreshControls(key) {
     const options = [[500,"realtime"], [1000,"oneSecond"], [2000,"seconds"], [5000,"seconds"], [10000,"seconds"], [15000,"seconds"], [30000,"seconds"], [60000,"minute"], [0,"paused"]];
     const selected = preference(key+"_interval", 2000);
-    return `<label>${textHTML("refreshRate")} <select class="sk-select refresh-interval" aria-label="${textHTML("refreshRate")}">${options.map(([value,label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${textHTML(label,{n:value/1000})}</option>`).join("")}</select></label><button class="sk-button btn" data-refresh>${textHTML("refresh")}</button><span class="status-line" data-refresh-status></span>`;
+    return `<div class="refresh-controls" role="group" aria-label="${textHTML("refreshRate")}"><label class="refresh-field"><span>${textHTML("refreshRate")}</span><select class="sk-select refresh-interval" aria-label="${textHTML("refreshRate")}">${options.map(([value,label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${textHTML(label,{n:value/1000})}</option>`).join("")}</select></label><button class="sk-button btn" data-refresh>${textHTML("refresh")}</button><span class="status-line" data-refresh-status aria-live="off"></span></div>`;
 }
 async function startPolling(page, container, key, refresh) {
     let interval = preference(key+"_interval", 2000);
@@ -445,18 +445,28 @@ function dashboardMetrics(combined,servers,data) {
 }
 
 async function renderDashboard(container,page) {
-    const data=new Map(),charts=new Map();
+    const data=new Map(),charts=new Map(),changingBlocking=new Set();
     let selected=preference("dashboard_hosts",null);
     if(selected!==null)selected=selected.filter(id=>state.servers.some(s=>s.id === id));
     const selectedServers=()=>state.servers.filter(s=>selected===null || selected.includes(s.id));
-    const foldPreference=key=>"dashboard_"+(key === "details" ? "details_expanded_v2" : key);
-    const sectionOpen=key=>preference(foldPreference(key),key === "details");
-    container.innerHTML=`<div class="dashboard-controls"><div class="target-picker dashboard-hosts" role="group" aria-label="${textHTML("hostFilter")}"><span class="count-note">${textHTML("hostFilter")}</span><label><input type="checkbox" data-all-hosts ${selected === null ? "checked" : ""}>${textHTML("allHosts")}</label>${state.servers.map(s=>`<label><input type="checkbox" data-dashboard-host="${s.id}" ${selected===null || selected.includes(s.id) ? "checked" : ""}>${escapeHtml(s.label)}</label>`).join("")}</div><div class="toolbar dashboard-refresh">${refreshControls("dashboard")}</div></div>
+    let activePanel=preference("dashboard_panel","details") === "top" ? "top" : "details";
+    container.innerHTML=`<div class="page-controls dashboard-controls"><div class="host-controls"><span class="control-label">${textHTML("hostFilter")}</span><div class="target-picker dashboard-hosts" role="group" aria-label="${textHTML("hostFilter")}"><label><input type="checkbox" data-all-hosts ${selected === null ? "checked" : ""}>${textHTML("allHosts")}</label>${state.servers.map(s=>`<label><input type="checkbox" data-dashboard-host="${s.id}" ${selected===null || selected.includes(s.id) ? "checked" : ""}>${escapeHtml(s.label)}</label>`).join("")}</div></div><div class="dashboard-refresh">${refreshControls("dashboard")}</div></div>
         <div class="combined-summary" id="summaryCombined"></div><p class="count-note">${textHTML("sumNote")}</p>
-        <div class="server-grid" id="dashGrid">${state.servers.map(s=>`<div class="sk-card card" id="summary${s.id}"></div>`).join("")}</div>
-        <details class="fold" data-fold="details" ${sectionOpen("details") ? "open" : ""}><summary>${textHTML("details")}</summary><div class="chart-grid">${["history","clientHistory","queryTypes","upstreams"].map(key=>`<div class="sk-card card chart-panel"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div class="chart-box"><canvas id="chart-${key}-combined" aria-label="${textHTML(key)}"></canvas></div></div>`).join("")}</div></details>
-        <details class="fold" data-fold="top" ${sectionOpen("top") ? "open" : ""}><summary>${textHTML("topPanels")}</summary><div class="chart-grid">${["topDomains","topBlocked","topClients"].map(key=>`<div class="sk-card card"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div id="${key}combined"></div></div>`).join("")}</div></details>`;
-    page.dispose=()=>{for(const chart of charts.values())chart.destroy()};
+        <div class="server-grid" id="dashGrid">${state.servers.map(s=>`<div class="sk-card card server-summary" id="summary${s.id}"></div>`).join("")}</div>
+        <div class="sk-tabs sk-tabs--sm dashboard-panels"><div class="sk-tabs__list" id="dashboardTabs" role="tablist" aria-label="${textHTML("dashboard")}">${["details","top"].map(key=>`<button class="sk-tabs__tab" id="dashboard-tab-${key}" type="button" role="tab" aria-selected="${activePanel===key}" aria-controls="dashboard-panel-${key}">${textHTML(key==="details" ? "details" : "topPanels")}</button>`).join("")}</div>
+        <section class="sk-tabs__panel" id="dashboard-panel-details" data-dashboard-panel="details" ${activePanel!=="details" ? "hidden" : ""}><div class="chart-grid">${["history","clientHistory","queryTypes","upstreams"].map(key=>`<div class="sk-card card chart-panel"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div class="chart-box"><canvas id="chart-${key}-combined" aria-label="${textHTML(key)}"></canvas></div></div>`).join("")}</div></section>
+        <section class="sk-tabs__panel" id="dashboard-panel-top" data-dashboard-panel="top" ${activePanel!=="top" ? "hidden" : ""}><div class="chart-grid">${["topDomains","topBlocked","topClients"].map(key=>`<div class="sk-card card"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div id="${key}combined"></div></div>`).join("")}</div></section></div>`;
+    const tabs=Sekura.createTabs($("#dashboardTabs",container),{onSelect:async id=>{
+        activePanel=id==="dashboard-tab-top" ? "top" : "details";
+        savePreference("dashboard_panel",activePanel);
+        draw();
+        for(const chart of charts.values())chart.resize();
+        // A poll already in flight may have requested the previously selected panel.
+        const wasBusy=page.busy;
+        await page.refresh?.();
+        if(wasBusy && page.active)await page.refresh?.();
+    }});
+    page.dispose=()=>{tabs.destroy();for(const chart of charts.values())chart.destroy()};
     const stat=(key,value)=>`<div class="stat-row"><span class="k">${textHTML(key)}</span><span class="v">${escapeHtml(value)}</span></div>`;
     function updateChart(key,type,labels,datasets) {
         if(!page.active)return;
@@ -474,12 +484,12 @@ async function renderDashboard(container,page) {
         for(const server of state.servers) {
             const card=document.getElementById("summary"+server.id);card.hidden=!servers.includes(server);
             const item=server.connected ? data.get(server.id) : null,q=item?.summary?.queries;
-            let html=`<h2><span class="tag tag-${server.id}">${escapeHtml(server.label)}</span> <span class="role-badge">${textHTML(server.role || "secondary")}</span></h2>`;
+            const enabled=item?.blocking?.blocking === "enabled";
+            let html=`<div class="server-card-header"><div class="server-card-heading"><h2><span class="tag tag-${server.id}">${escapeHtml(server.label)}</span></h2><span class="role-badge">${textHTML(server.role || "secondary")}</span></div>${q ? `<button class="sk-button sk-button--sm sk-button--${enabled ? "danger" : "success"}" data-blocking="${server.id}" data-enable="${!enabled}" ${changingBlocking.has(server.id) ? "disabled" : ""}>${textHTML(enabled ? "disableBlocking" : "enableBlocking")}</button>` : ""}</div>`;
             if(!server.connected)html+=`<p class="sub">${textHTML(server.checking ? "connecting" : "disconnected")}</p>`;
             else if(!q)html+=`<p class="sub">${textHTML("unavailable")}</p>`;
             else {
-                const enabled=item.blocking?.blocking === "enabled";
-                html+=`<div class="big-num">${fmtNum(q.total)}</div><p class="sub">${textHTML("queriesToday")}</p>${stat("blocked",fmtNum(q.blocked))}${stat("lastGravity",fmtDate(item.summary.gravity?.last_update))}<div class="record-actions"><button class="sk-button btn xs ${enabled ? "danger" : "success"}" data-blocking="${server.id}" data-enable="${!enabled}">${textHTML(enabled ? "disableBlocking" : "enableBlocking")}</button></div>`;
+                html+=`<div class="server-card-total"><span class="big-num">${fmtNum(q.total)}</span><span class="sub">${textHTML("queriesToday")}</span></div>${stat("blocked",fmtNum(q.blocked))}${stat("lastGravity",fmtDate(item.summary.gravity?.last_update))}`;
             }
             setHTML(card,html);
         }
@@ -491,7 +501,7 @@ async function renderDashboard(container,page) {
             const values=combined[key][key === "topClients" ? "clients" : "domains"],max=Math.max(1,...values.map(v=>v.count));
             setHTML(document.getElementById(key+"combined"),values.length ? values.slice(0,10).map(v=>`<div class="bar-row"><div class="bar-label"><span class="name" title="${escapeHtml(v.domain || v.name || v.ip)}">${escapeHtml(v.domain || v.name || v.ip)}</span><span>${fmtNum(v.count)}</span></div><div class="bar-track"><div class="bar-fill neutral" style="width:${100*v.count/max}%"></div></div></div>`).join("") : `<p class="sub">${textHTML("empty")}</p>`);
         }
-        if(!$("[data-fold=details]",container).open)return;
+        if(activePanel!=="details")return;
         const labels=rows=>rows.map(v=>new Date(v.timestamp*1000).toLocaleTimeString(localeCode(),{hour:"2-digit",minute:"2-digit"})),history=combined.history.history;
         updateChart("history","bar",labels(history),[
             {label:t("blocked"),data:history.map(v=>v.blocked),backgroundColor:palette[1]},
@@ -516,21 +526,18 @@ async function renderDashboard(container,page) {
         }else return;
         savePreference("dashboard_hosts",selected);draw();page.refresh?.();
     });
-    for(const fold of $$("[data-fold]",container))fold.addEventListener("toggle",()=>{
-        if(!page.active)return;
-        savePreference(foldPreference(fold.dataset.fold),fold.open);
-        if(fold.open){for(const chart of charts.values())chart.resize();page.refresh?.()}
-    });
     container.addEventListener("click",async event=>{
         if(event.target.closest("[data-open-drift]")){switchTab("drift").catch(showError);return;}
-        const button=event.target.closest("[data-blocking]");if(!button)return;button.disabled=true;
-        try {await api(serverById(button.dataset.blocking),"/dns/blocking",{method:"POST",body:{blocking:button.dataset.enable === "true"}});await page.refresh()}
-        catch(error){showError(error)}finally{button.disabled=false}
+        const button=event.target.closest("[data-blocking]");if(!button || changingBlocking.has(button.dataset.blocking))return;
+        const serverID=button.dataset.blocking;
+        changingBlocking.add(serverID);button.disabled=true;
+        try {await api(serverById(serverID),"/dns/blocking",{method:"POST",body:{blocking:button.dataset.enable === "true"}});await page.refresh()}
+        catch(error){showError(error)}finally{changingBlocking.delete(serverID);if(page.active)draw()}
     });
     draw();
     page.redraw=draw;
     await startPolling(page,container,"dashboard",async()=>{
-        const errors=[],details=$("[data-fold=details]",container).open,top=$("[data-fold=top]",container).open;
+        const errors=[],details=activePanel==="details",top=activePanel==="top";
         await Promise.all(state.servers.filter(s=>s.connected).map(async server=>{
             try {
                 const [summary,blocking]=await Promise.all([api(server,"/stats/summary"),api(server,"/dns/blocking")]);
@@ -581,15 +588,13 @@ async function renderQueries(container, page) {
     const rows = new Map(), cursors = new Map(), clientNames = new Map(), latest = new Map(), changingDomains = new Set();
     let resetRequested = true, limited = false;
     const option = (value,label,selected) => `<option value="${escapeHtml(value)}" ${String(value) === String(selected) ? "selected" : ""}>${escapeHtml(label)}</option>`;
-    container.innerHTML = `<div class="toolbar">
+    container.innerHTML = `<div class="page-controls queries-controls"><label class="host-controls control-field"><span>${textHTML("server")}</span><select class="sk-select" data-server-filter>${option("all",t("all"),model.server)}${state.servers.map(s=>option(s.id,s.label,model.server)).join("")}</select></label>${refreshControls("queries")}</div><div class="toolbar query-filters">
         <label>${textHTML("range")}<select class="sk-select" data-range>${[[1,"hour"],[6,"hours"],[24,"hours"],[72,"days"],[168,"days"]].map(([n,key])=>option(n,t(key,{n:n>24?n/24:n}),model.range)).join("")}</select></label>
         <label>${textHTML("filter")}<input class="sk-input" type="text" data-filter value="${escapeHtml(model.filter)}" placeholder="${textHTML("filterHint")}"></label>
-        <label>${textHTML("server")}<select class="sk-select" data-server-filter>${option("all",t("all"),model.server)}${state.servers.map(s=>option(s.id,s.label,model.server)).join("")}</select></label>
         <label>${textHTML("client")}<select class="sk-select" data-client-filter></select></label>
         <label>${textHTML("type")}<select class="sk-select" data-type-filter></select></label>
         <label>${textHTML("status")}<select class="sk-select" data-status-filter></select></label>
         <label>${textHTML("perPage")}<select class="sk-select" data-page-size>${[25,50,100,250,1000].map(n=>option(n,n,model.pageSize)).join("")}</select></label>
-        <span class="spacer"></span>${refreshControls("queries")}
         </div><div class="sk-card card"><p class="sub">${textHTML("queryActionsHelp")}</p><div class="sk-table table-wrap queries-table"><table class="datatable"><thead><tr>${["time","server","client","domain","type","queryResult","status"].map(key=>`<th data-sort="${key}" aria-sort="none">${textHTML(key)}</th>`).join("")}<th>${textHTML("actions")}</th></tr></thead><tbody></tbody></table></div>
         ${pagerHTML()}<button class="sk-button btn xs" data-load-more>${textHTML("loadMore")}</button><p class="sub" data-query-note></p></div>`;
     const tbody = $("tbody",container);

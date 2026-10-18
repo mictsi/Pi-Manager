@@ -152,9 +152,11 @@ func TestNativeDesktop(t *testing.T) {
                 const exitBehavior=document.querySelector("[data-exit-behavior]");exitBehavior.value="ask";exitBehavior.dispatchEvent(new Event("change"));
                 await wait(()=>!exitBehavior.disabled);
                 for (const values of Object.values(MESSAGES)) assert(values.length===4 && values.every(Boolean), "Incomplete translation");
-                savePreference("dashboard_details",false);
+                savePreference("dashboard_panel","details");
+                await smokeResize(1440,1000);await wait(()=>Math.abs(innerWidth-1440)<5);
                 for (const language of ["en","el","sv","da","en"]) {
                     await setLanguage(language);
+                    let dashboardRefreshOffset;
                     for (const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift","settings"]) {
                         await switchTab(tab);
                         assert(!document.querySelector("#tabContent .btn:not(.sk-button),#tabContent .card:not(.sk-card),#tabContent select:not(.sk-select),#tabContent .table-wrap:not(.sk-table)"),"View contains legacy components: "+tab);
@@ -167,8 +169,21 @@ func TestNativeDesktop(t *testing.T) {
                         if(tab === "gravity")assert(document.querySelector("[data-gravity-all]")?.textContent===t("updateGravityAll"),"Missing translated all-server Gravity action");
                         if(tab === "settings")assert(document.querySelector("[data-backup-all]").textContent===t("backupAll") && document.querySelector("[data-backup-config]").textContent===t("backupConfig") && document.querySelector("[data-server-backup]").textContent===t("backupServer"),"Missing translated backup controls");
                         if(tab === "dashboard") {
-                            const controls=document.querySelector(".dashboard-controls"),hosts=controls.querySelector(".dashboard-hosts").getBoundingClientRect(),refresh=controls.querySelector(".dashboard-refresh").getBoundingClientRect();
-                            assert(hosts.left<refresh.left && Math.abs(hosts.top-refresh.top)<2 && Math.abs(refresh.right-(controls.getBoundingClientRect().right-parseFloat(getComputedStyle(controls).paddingRight)-1))<2,"Dashboard hosts/refresh are not aligned left/right on the same row: "+JSON.stringify({hosts:hosts.toJSON(),refresh:refresh.toJSON(),controls:controls.getBoundingClientRect().toJSON(),width:innerWidth}));
+                            const button=document.querySelector("#summary1 [data-blocking]"),header=document.querySelector("#summary1 .server-card-header").getBoundingClientRect(),box=button.getBoundingClientRect();
+                            assert(Math.abs(box.top-header.top)<2 && Math.abs(box.right-header.right)<2,"Blocking button is not at the top right of its card");
+                        }
+                        if(["dashboard","queries"].includes(tab)) {
+                            const controls=document.querySelector(".page-controls"),hosts=controls.querySelector(tab==="dashboard" ? ".dashboard-hosts" : "[data-server-filter]").getBoundingClientRect(),group=controls.querySelector(".refresh-controls"),refresh=group.querySelector("select").getBoundingClientRect(),button=group.querySelector("button").getBoundingClientRect(),status=group.querySelector("[data-refresh-status]").getBoundingClientRect();
+                            const offset=refresh.top-controls.getBoundingClientRect().top;
+                            if(tab==="dashboard")dashboardRefreshOffset=offset;
+                            else assert(Math.abs(offset-dashboardRefreshOffset)<2,"Refresh controls occupy different rows across Dashboard and Queries: "+language);
+                            assert(hosts.left<refresh.left && Math.abs(hosts.bottom-refresh.bottom)<2,"Host and refresh fields are not on the same row: "+tab+"/"+language);
+                            assert(Math.abs(button.bottom-refresh.bottom)<2 && Math.abs((status.top+status.height/2)-(refresh.top+refresh.height/2))<2,"Refresh button or timestamp is misaligned: "+tab+"/"+language);
+                            assert(Math.abs(group.getBoundingClientRect().right-(controls.getBoundingClientRect().right-parseFloat(getComputedStyle(controls).paddingRight)-1))<2,"Refresh group is not aligned right: "+tab);
+                            if(tab==="queries") {
+                                const fields=[...document.querySelectorAll(".query-filters input,.query-filters select")].map(field=>field.getBoundingClientRect());
+                                assert(fields.every(field=>Math.abs(field.bottom-fields[0].bottom)<2),"Query filter fields are misaligned: "+language);
+                            }
                         }
                         if(tab === "settings")assert(document.querySelector("[data-restore-server]").textContent===t("restoreServer") && document.querySelector("[data-restore-config]").textContent===t("restoreConfig"),"Missing translated restore controls");
                         if(tab === "queries") {
@@ -198,23 +213,37 @@ func TestNativeDesktop(t *testing.T) {
                         }
                     }
                 }
+                await smokeResize(2400,1000);await wait(()=>innerWidth>=2300);
                 await switchTab("dashboard");
-                const details=document.querySelector("[data-fold=details]"),top=document.querySelector("[data-fold=top]");
-                assert(details.open && !top.open,"Details must start expanded and top panels collapsed");
+                const details=document.querySelector("[data-dashboard-panel=details]"),top=document.querySelector("[data-dashboard-panel=top]"),detailsTab=document.getElementById("dashboard-tab-details"),topTab=document.getElementById("dashboard-tab-top");
+                assert(!details.hidden && top.hidden && detailsTab.getAttribute("aria-selected")==="true","Details must be the initial dashboard tab");
                 assert(document.querySelectorAll(".metric-tile").length===5 && document.querySelector(".metric-ring") && document.querySelector(".metric-sparkline polyline"),"Visual dashboard metrics are missing");
-                details.open=true;
                 await wait(()=>!state.page.busy && Chart.getChart(document.querySelector("canvas")));
                 const canvas=document.querySelector("canvas"),chart=Chart.getChart(canvas);
                 await state.page.refresh();
                 assert(document.querySelector("canvas")===canvas && Chart.getChart(canvas)===chart,"Polling recreated charts");
-                details.open=false;
+                // Switch during an in-flight poll; the newly selected panel must still load.
+                const pendingDetails=state.page.refresh();topTab.click();await pendingDetails;
+                await wait(()=>!state.page.busy && document.querySelector("#topDomainscombined .bar-row"));
+                assert(details.hidden && !top.hidden && topTab.tabIndex===0 && detailsTab.tabIndex===-1,"Dashboard tabs did not select the top panel");
+                topTab.focus();topTab.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}));
+                await wait(()=>!state.page.busy && !details.hidden);
+                assert(document.activeElement===detailsTab && Chart.getChart(canvas)===chart && chart.width>0,"Keyboard tab selection lost the existing chart");
+                topTab.click();await wait(()=>!state.page.busy);
+                const blockingButton=document.querySelector('#summary1 [data-blocking]');blockingButton.click();
+                assert(blockingButton.disabled,"Blocking toggle was not locked while saving");
+                await wait(()=>document.querySelector('#summary1 [data-blocking]').dataset.enable==="true" && !document.querySelector('#summary1 [data-blocking]').disabled);
+                document.querySelector('#summary1 [data-blocking]').click();
+                await wait(()=>document.querySelector('#summary1 [data-blocking]').dataset.enable==="false" && !document.querySelector('#summary1 [data-blocking]').disabled);
                 const refresh=document.querySelector(".refresh-interval");
                 assert(refresh.value==="2000","Default dashboard refresh is not two seconds");
                 assert(["500","1000","2000","10000","30000","60000"].every(v=>[...refresh.options].some(o=>o.value===v)),"Missing refresh intervals");
                 const before=document.getElementById("summary1").textContent;
                 refresh.value="500";refresh.dispatchEvent(new Event("change"));
                 await wait(()=>document.getElementById("summary1").textContent!==before);
-                assert(!details.open,"Polling reopened collapsed panels");
+                assert(details.hidden && !top.hidden,"Polling changed the selected dashboard tab");
+                await switchTab("queries");await switchTab("dashboard");
+                assert(!document.querySelector("[data-dashboard-panel=top]").hidden,"Dashboard tab selection did not survive navigation");
                 assert(!document.querySelector("[data-logout],[data-settings-logout]"),"Logout remains outside Settings");
                 assert(document.getElementById("serverPills").parentElement.classList.contains("topbar-row"),"Server status is not in the top row");
                 const combined=combineDashboard([
@@ -499,7 +528,7 @@ func TestNativeDesktop(t *testing.T) {
                 state.servers[1].connected=false;await state.page.refresh();
                 document.querySelector("[data-gravity-all]").click();
                 await wait(()=>!gravityState.get("1").running);
-                assert(gravityCalls.join(",")==="1,2,1" && document.getElementById("gravLog1").textContent.includes("500"),"All-server Gravity ran a logged-out host or concealed an error");
+                assert(gravityCalls.join(",")==="1,2,1" && document.getElementById("gravLog1").textContent.includes("500"),"All-server Gravity ran a logged-out host or concealed an error: "+JSON.stringify({calls:gravityCalls,log:document.getElementById("gravLog1").textContent,connected:state.servers.map(s=>s.connected)}));
                 state.servers[1].connected=true;await state.page.refresh();
                 document.querySelector("[data-gravity-all]").click();
                 await wait(()=>!gravityState.get("1").running && !gravityState.get("2").running);

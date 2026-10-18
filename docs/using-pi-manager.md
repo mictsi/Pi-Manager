@@ -28,9 +28,13 @@ shows the main server's total, even when the host filter changes. A different
 secondary count raises a warning; use **Display drift** to inspect the actual
 configuration differences.
 
-**Details** starts expanded, while the top-domain panels start collapsed. Panel
-choices are remembered. **Dashboard** and **Queries** default to a two-second
-refresh. Each page has its own selector: realtime (a 500 ms poll), 1, 2, 5, 10, 15
+**Details** is the initial dashboard tab. Switch to **Top domains and clients**
+to explore the busiest domains, blocked domains and clients. The selected tab is
+remembered. Each server card has a blocking toggle in its top-right corner.
+
+**Dashboard** and **Queries** share a host and refresh control row, with query
+filters grouped underneath. Both default to a two-second refresh. Each page has
+its own selector: realtime (a 500 ms poll), 1, 2, 5, 10, 15
 or 30 seconds, one minute, or paused. Intervals run after a request finishes;
 slower servers can make updates take longer. Use manual refresh whenever needed.
 
