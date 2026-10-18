@@ -110,6 +110,7 @@ func newDesktop(a *App) (webview.WebView, error) {
 		return nil, fmt.Errorf("cannot install exit confirmation: %w", err)
 	}
 	exit.show = exitHook.restore
+	exit.minimize = exitHook.minimize
 	if tray.restore != nil {
 		exit.show = tray.restore
 	}

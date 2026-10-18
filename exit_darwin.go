@@ -63,6 +63,7 @@ func bindExitWindow(w webview.WebView, request func()) (*exitWindow, error) {
 			app.Send(objc.RegisterName("activateIgnoringOtherApps:"), true)
 			window.Send(objc.RegisterName("makeKeyAndOrderFront:"), objc.ID(0))
 		},
-		close: cleanup,
+		minimize: func() { window.Send(objc.RegisterName("miniaturize:"), objc.ID(0)) },
+		close:    cleanup,
 	}, nil
 }

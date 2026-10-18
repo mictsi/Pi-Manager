@@ -1266,9 +1266,9 @@ async function renderSettings(container, page) {
     $("[data-interface-density]",appearance).value=document.documentElement.dataset.skDensity;
     $("[data-interface-density]",appearance).onchange=event=>setWorkspaceDensity(event.target.value);
     const exitSettings=document.createElement("div");exitSettings.className="sk-card card";container.append(exitSettings);
-    exitSettings.innerHTML=`<h2>${textHTML("exitBehavior")}</h2><p class="sub">${textHTML("exitBehaviorHelp")}</p>${field("exitBehavior",`<select class="sk-select" data-exit-behavior><option value="ask">${textHTML("exitAsk")}</option><option value="exit">${textHTML("exitAlways")}</option><option value="cancel">${textHTML("exitNever")}</option></select>`)}`;
+    exitSettings.innerHTML=`<h2>${textHTML("exitBehavior")}</h2><p class="sub">${textHTML("exitBehaviorHelp")}</p>${field("exitBehavior",`<select class="sk-select" data-exit-behavior><option value="ask">${textHTML("exitAsk")}</option><option value="exit">${textHTML("exitAlways")}</option><option value="minimize">${textHTML("exitMinimize")}</option><option value="cancel">${textHTML("exitNever")}</option></select>`)}`;
     const exitBehavior=$("[data-exit-behavior]",exitSettings);
-    exitBehavior.value=["exit","cancel"].includes(desktopConfig.preferences.ph_combo_exit_decision) ? desktopConfig.preferences.ph_combo_exit_decision : "ask";
+    exitBehavior.value=["exit","cancel","minimize"].includes(desktopConfig.preferences.ph_combo_exit_decision) ? desktopConfig.preferences.ph_combo_exit_decision : "ask";
     exitBehavior.onchange=async()=>{
         const choice=exitBehavior.value;exitBehavior.disabled=true;
         try {await nativePreference("ph_combo_exit_decision",choice);desktopConfig.preferences.ph_combo_exit_decision=choice;toast(t("saved"),"ok");}
@@ -1383,7 +1383,7 @@ window.showExitDialog=()=>{
     if(dialog){$("[data-exit-decision=cancel]",dialog).focus();return;}
     dialog=document.createElement("dialog");dialog.id="exitDialog";dialog.className="sk-dialog sk-dialog--confirm";
     dialog.setAttribute("aria-labelledby","exitDialogTitle");dialog.setAttribute("aria-describedby","exitDialogHelp");
-    dialog.innerHTML=`<div class="sk-dialog__panel"><div class="sk-dialog__header"><span class="dialog-status-icon">${statusIcon("")}</span><h2 class="sk-dialog__title" id="exitDialogTitle">${textHTML("exitTitle")}</h2></div><div class="sk-dialog__body"><p id="exitDialogHelp">${textHTML("exitWarning")}</p><label class="exit-remember"><input type="checkbox" data-exit-remember> <span>${textHTML("rememberDecision")}</span></label><p class="backup-result backup-error" role="alert" data-exit-error hidden></p></div><div class="sk-dialog__footer"><button type="button" class="sk-button sk-button--secondary" data-exit-decision="cancel" autofocus>${textHTML("cancel")}</button><button type="button" class="sk-button sk-button--danger" data-exit-decision="exit">${textHTML("exit")}</button></div></div>`;
+    dialog.innerHTML=`<div class="sk-dialog__panel"><div class="sk-dialog__header"><span class="dialog-status-icon">${statusIcon("")}</span><h2 class="sk-dialog__title" id="exitDialogTitle">${textHTML("exitTitle")}</h2></div><div class="sk-dialog__body"><p id="exitDialogHelp">${textHTML("exitWarning")}</p><label class="exit-remember"><input type="checkbox" data-exit-remember> <span>${textHTML("rememberDecision")}</span></label><p class="backup-result backup-error" role="alert" data-exit-error hidden></p></div><div class="sk-dialog__footer"><button type="button" class="sk-button sk-button--secondary" data-exit-decision="cancel" autofocus>${textHTML("cancel")}</button><button type="button" class="sk-button sk-button--secondary" data-exit-decision="minimize">${textHTML("minimize")}</button><button type="button" class="sk-button sk-button--danger" data-exit-decision="exit">${textHTML("exit")}</button></div></div>`;
     let controller;
     const decide=async decision=>{
         if(dialog.dataset.busy)return;

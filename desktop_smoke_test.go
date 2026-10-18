@@ -34,6 +34,17 @@ func TestNativeDesktop(t *testing.T) {
 	defer w.Destroy()
 	var exitAttempts atomic.Int32
 	w.(*managedDesktop).exit.terminate = func() { exitAttempts.Add(1) }
+	var minimizeAttempts atomic.Int32
+	nativeMinimize := w.(*managedDesktop).exit.minimize
+	w.(*managedDesktop).exit.minimize = func() {
+		minimizeAttempts.Add(1)
+		nativeMinimize()
+		// Bring the window back so the remaining UI checks can run unattended.
+		time.AfterFunc(50*time.Millisecond, func() { w.Dispatch(w.(*managedDesktop).exit.show) })
+	}
+	if err := w.Bind("smokeMinimizeAttempts", func() int32 { return minimizeAttempts.Load() }); err != nil {
+		t.Fatal(err)
+	}
 	if err := w.Bind("smokeRequestExit", w.(*managedDesktop).exit.Request); err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +162,19 @@ func TestNativeDesktop(t *testing.T) {
                 assert(!document.getElementById("exitDialog") && await smokeExitAttempts()===0,"Remembered Cancel showed a prompt or exited");
                 const exitBehavior=document.querySelector("[data-exit-behavior]");exitBehavior.value="ask";exitBehavior.dispatchEvent(new Event("change"));
                 await wait(()=>!exitBehavior.disabled);
+                await smokeRequestExit();await wait(()=>document.getElementById("exitDialog")?.open);
+                const minimizeButton=document.querySelector('[data-exit-decision="minimize"]');
+                assert(minimizeButton.textContent===t("minimize"),"Exit dialog lacks the translated Minimize option");
+                minimizeButton.click();await wait(()=>!document.getElementById("exitDialog"));
+                assert(await smokeMinimizeAttempts()===1 && await smokeExitAttempts()===0 && desktopConfig.preferences.ph_combo_exit_decision==="ask","Minimize exited or persisted an unchecked decision");
+                await smokeRequestExit();await wait(()=>document.getElementById("exitDialog")?.open);
+                document.querySelector("[data-exit-remember]").checked=true;
+                document.querySelector('[data-exit-decision="minimize"]').click();await wait(()=>!document.getElementById("exitDialog"));
+                assert(await smokeMinimizeAttempts()===2 && document.querySelector("[data-exit-behavior]").value==="minimize","Remembered Minimize did not update Settings");
+                await smokeRequestExit();await new Promise(r=>setTimeout(r,80));
+                assert(await smokeMinimizeAttempts()===3 && await smokeExitAttempts()===0 && !document.getElementById("exitDialog"),"Remembered Minimize showed a prompt or exited");
+                exitBehavior.value="ask";exitBehavior.dispatchEvent(new Event("change"));await wait(()=>!exitBehavior.disabled);
+
                 for (const values of Object.values(MESSAGES)) assert(values.length===4 && values.every(Boolean), "Incomplete translation");
                 savePreference("dashboard_panel","details");
                 await smokeResize(1440,1000);await wait(()=>Math.abs(innerWidth-1440)<5);
@@ -184,6 +208,12 @@ func TestNativeDesktop(t *testing.T) {
                                 const fields=[...document.querySelectorAll(".query-filters input,.query-filters select")].map(field=>field.getBoundingClientRect());
                                 assert(fields.every(field=>Math.abs(field.bottom-fields[0].bottom)<2),"Query filter fields are misaligned: "+language);
                             }
+                        }
+                        if(tab==="settings") {
+                            assert(document.querySelector('[data-exit-behavior] option[value="minimize"]').textContent===t("exitMinimize"),"Settings lacks the translated Minimize behavior");
+                            await smokeRequestExit();await wait(()=>document.getElementById("exitDialog")?.open);
+                            assert(document.querySelector('[data-exit-decision="minimize"]').textContent===t("minimize"),"Minimize is not translated: "+language);
+                            document.querySelector('[data-exit-decision="cancel"]').click();await wait(()=>!document.getElementById("exitDialog"));
                         }
                         if(tab === "settings")assert(document.querySelector("[data-restore-server]").textContent===t("restoreServer") && document.querySelector("[data-restore-config]").textContent===t("restoreConfig"),"Missing translated restore controls");
                         if(tab === "queries") {

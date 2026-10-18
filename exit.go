@@ -7,16 +7,16 @@ import (
 
 const exitPreference = "ph_combo_exit_decision"
 
-type exitWindow struct{ restore, close func() }
+type exitWindow struct{ restore, minimize, close func() }
 
 // All native close paths share one pending confirmation. Terminate remains an
 // unconditional shutdown for confirmed exits, startup errors and test watchdogs.
 type exitController struct {
-	config                  *ConfigStore
-	dispatch                func(func())
-	show, prompt, terminate func()
-	mu                      sync.Mutex
-	ready, pending, stopped bool
+	config                            *ConfigStore
+	dispatch                          func(func())
+	show, prompt, terminate, minimize func()
+	mu                                sync.Mutex
+	ready, pending, stopped           bool
 }
 
 func (e *exitController) Request() {
@@ -32,6 +32,8 @@ func (e *exitController) Request() {
 			e.terminate()
 		case "cancel":
 			return
+		case "minimize":
+			e.minimize()
 		default:
 			e.pending = true
 			e.show()
@@ -59,8 +61,8 @@ func (e *exitController) Ready() {
 func (e *exitController) Decide(decision string, remember bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if decision != "exit" && decision != "cancel" {
-		return errors.New("choose Exit or Cancel")
+	if decision != "exit" && decision != "cancel" && decision != "minimize" {
+		return errors.New("choose Exit, Minimize or Cancel")
 	}
 	if !e.pending || e.stopped {
 		return errors.New("no exit confirmation is pending")
@@ -74,6 +76,8 @@ func (e *exitController) Decide(decision string, remember bool) error {
 	if decision == "exit" {
 		e.stopped = true
 		e.dispatch(e.terminate)
+	} else if decision == "minimize" {
+		e.dispatch(e.minimize)
 	}
 	return nil
 }

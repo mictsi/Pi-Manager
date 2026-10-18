@@ -42,17 +42,20 @@ English and dense mode; window decorations and tray availability vary by OS.
 
 When a usable tray is available, minimizing hides the running window from the
 Windows/Linux taskbar or macOS Dock. Use the tray menu to restore the dashboard
-or quit. Use the window's normal minimize control to minimize to tray.
+or quit. Use the window's normal minimize control, or choose **Minimize** in
+the exit confirmation, to minimize to tray. Without a usable tray, Minimize
+uses normal window minimization.
 
-Closing the window or choosing Quit opens a confirmation with **Exit** and
-**Cancel**. **Remember my decision** saves the selected behavior in `config.json`.
+Closing the window or choosing Quit opens a confirmation with **Cancel**,
+**Minimize** and **Exit**. **Remember my decision** saves the selected behavior in `config.json`.
 Remembering Exit skips future confirmations; remembering Cancel keeps the app
-open on subsequent close/quit requests. Change **Settings → Exit behavior** to
-**Ask before exiting** to restore the confirmation, or choose a different
+open on subsequent close/quit requests. Remembering Minimize minimizes instead
+of exiting on subsequent close/quit requests, while monitoring continues.
+Change **Settings → Exit behavior** to **Ask before exiting** to restore the confirmation, or choose a different
 behavior. Exiting stops Pi-Manager's monitoring and active operations; Pi-hole
 servers keep running.
 
-![Exit confirmation with Cancel, Exit and Remember my decision](images/exit-confirmation.png)
+![Exit confirmation with Cancel, Minimize, Exit and Remember my decision](images/exit-confirmation.png)
 
 The native monitor keeps sampling while the dashboard is hidden, normally every
 five seconds after the previous sample completes. Tray status includes
