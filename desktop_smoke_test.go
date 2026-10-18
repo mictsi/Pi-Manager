@@ -77,11 +77,12 @@ func TestNativeDesktop(t *testing.T) {
             const assert = (condition, message) => { if (!condition) throw new Error(message); };
             const wait = async test => {
                 for (let n=0; n<400; n++) { if (test()) return; await new Promise(r=>setTimeout(r,25)); }
-                throw new Error("Timed out waiting for dashboard state");
+                throw new Error("Timed out waiting for dashboard state: "+String(test));
             };
             try {
                 await wait(() => typeof state !== "undefined" && state.ready && document.getElementById("desktopSettings"));
-                assert(document.getElementById("tabContent").getBoundingClientRect().width >= innerWidth-2, "Window width is constrained");
+                const rail=document.getElementById("workspaceNav").getBoundingClientRect(),workspace=document.getElementById("tabContent").getBoundingClientRect();
+                assert(workspace.width+rail.width >= innerWidth-2 && Math.abs(workspace.right-innerWidth)<2, "Workspace does not fill the available window");
                 for(const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift"]) {
                     await switchTab(tab);
                     assert(!document.querySelector('[data-loginform],input[type="password"]'),"Login controls outside Settings on first launch: "+tab);
@@ -97,15 +98,50 @@ func TestNativeDesktop(t *testing.T) {
                 document.getElementById("desktopSettings").requestSubmit();
                 await wait(() => state.servers.every(s=>s.connected && !s.checking));
                 await setLanguage("en");
+                assert(document.documentElement.dataset.skTheme===document.documentElement.dataset.theme,"Sekura theme does not match saved theme");
+                assert(document.querySelector('#tabs [aria-current="page"]').dataset.tab==="settings","Navigation does not identify the current page");
+                assert(document.documentElement.dataset.skDensity==="dense","Dense mode is not the default");
+                assert(/^[0-9a-f]{12}$/.test(desktopBuild.uiRevision) && document.querySelector("[data-app-build]").textContent.includes(desktopBuild.version+" · "+desktopBuild.uiRevision),"Settings does not identify the running binary and embedded UI revision");
+                assert(!document.querySelector(".navigation-label,.navigation-footer,[data-local-workspace]"),"Removed workspace labels remain in the menu");
+                const densityButton=document.getElementById("densityToggle");densityButton.click();
+                assert(document.documentElement.dataset.skDensity==="comfortable" && densityButton.getAttribute("aria-pressed")==="false","Comfortable density did not apply");
+                await switchTab("settings");
+                assert(document.documentElement.dataset.skDensity==="comfortable","Density was lost during navigation");
+                document.getElementById("densityToggle").click();
+                assert(document.documentElement.dataset.skDensity==="dense","Dense mode did not return");
+                const decisionOpener=document.querySelector("[data-backup-config]");decisionOpener.focus();
+                const decision=confirmAction("Review this test change",{danger:true});
+                assert(document.getElementById("actionDialog").open && document.activeElement.hasAttribute("data-confirm-cancel"),"Confirmation did not focus the safe option");
+                assert(await confirmAction("Duplicate decision")===false && document.querySelectorAll("#actionDialog").length===1,"Confirmation dialogs stacked");
+                document.getElementById("actionDialog").dispatchEvent(new Event("cancel",{cancelable:true}));
+                // Synthetic cancel events do not perform the native default.
+                document.querySelector("[data-confirm-cancel]").click();
+                assert(await decision===false && document.activeElement===decisionOpener,"Cancel did not restore focus or reject the action");
+                const acceptedDecision=confirmAction("Apply this test change");document.querySelector("[data-confirm-accept]").click();
+                assert(await acceptedDecision===true && !document.getElementById("actionDialog"),"Confirmation did not resolve the approved action");
+                const dismissTest=toast("Notification test","ok");
+                assert(document.querySelector("#toastArea [data-sk-toast-dismiss]") && document.getElementById("toastArea").getAttribute("aria-live")==="polite","Notification is not accessible or dismissible");
+                dismissTest();
                 try {
                     await nativeRequest("1", "invalid-path", "GET", "", false);
                     throw new Error("Invalid request was accepted");
                 } catch (error) { assert(error.message.includes("API path"), "Native errors are not Error objects"); }
                 assert(!document.getElementById("minimizeTray"),"Minimize-to-tray button was not removed");
                 await smokeRequestExit();await wait(()=>document.getElementById("exitDialog")?.open);
+                assert(document.querySelector("#exitDialog.sk-dialog > .sk-dialog__panel > .sk-dialog__footer") && !document.querySelector("#exitDialog.exit-dialog"),"Exit confirmation retained its legacy design");
+                const exitTheme=localStorage.getItem("ph_combo_theme") || "dark";
+                for(const theme of ["light","dark"]) {
+                    localStorage.setItem("ph_combo_theme",theme);applyWorkspaceTheme();
+                    const surface=getComputedStyle(document.querySelector("#tabContent .card")).backgroundColor;
+                    for(const part of [".sk-dialog__panel",".sk-dialog__footer"]) {
+                        const actual=getComputedStyle(document.querySelector("#exitDialog "+part)).backgroundColor;
+                        assert(actual===surface,"Exit "+part+" does not match the "+theme+" workspace surface: "+actual+" instead of "+surface);
+                    }
+                }
+                localStorage.setItem("ph_combo_theme",exitTheme);applyWorkspaceTheme();
                 await smokeRequestExit();
                 assert(document.querySelectorAll("#exitDialog").length===1 && document.activeElement.dataset.exitDecision==="cancel","Exit confirmation duplicated or defaulted to Exit");
-                document.querySelector('[data-exit-decision="cancel"]').click();await wait(()=>!document.getElementById("exitDialog"));
+                document.getElementById("exitDialog").dispatchEvent(new Event("cancel",{cancelable:true}));await wait(()=>!document.getElementById("exitDialog"));
                 assert(await smokeExitAttempts()===0 && !desktopConfig.preferences.ph_combo_exit_decision,"Cancel exited or persisted an unchecked choice");
                 await smokeRequestExit();await wait(()=>document.getElementById("exitDialog")?.open);
                 document.querySelector("[data-exit-remember]").checked=true;
@@ -121,6 +157,9 @@ func TestNativeDesktop(t *testing.T) {
                     await setLanguage(language);
                     for (const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift","settings"]) {
                         await switchTab(tab);
+                        assert(!document.querySelector("#tabContent .btn:not(.sk-button),#tabContent .card:not(.sk-card),#tabContent select:not(.sk-select),#tabContent .table-wrap:not(.sk-table)"),"View contains legacy components: "+tab);
+                        const firstCell=document.querySelector("#tabContent .datatable tbody td");
+                        if(firstCell)assert(getComputedStyle(firstCell).paddingTop==="4px","Dense row spacing did not apply: "+tab);
                         assert(document.documentElement.lang===language,"Wrong document language");
                         if(["domains","hosts","clients","lists"].includes(tab))assert(document.querySelector("[data-sync-secondaries]")?.textContent===t("syncSecondaries"),"Missing translated resource sync action");
                         if(tab === "domains")assert(document.querySelector(".wildcard-option label").textContent===t("addDomainWildcard") && document.getElementById("domainWildcardHelp").textContent===t("domainWildcardHelp"),"Missing translated wildcard option");
@@ -129,7 +168,7 @@ func TestNativeDesktop(t *testing.T) {
                         if(tab === "settings")assert(document.querySelector("[data-backup-all]").textContent===t("backupAll") && document.querySelector("[data-backup-config]").textContent===t("backupConfig") && document.querySelector("[data-server-backup]").textContent===t("backupServer"),"Missing translated backup controls");
                         if(tab === "dashboard") {
                             const controls=document.querySelector(".dashboard-controls"),hosts=controls.querySelector(".dashboard-hosts").getBoundingClientRect(),refresh=controls.querySelector(".dashboard-refresh").getBoundingClientRect();
-                            assert(hosts.left<refresh.left && Math.abs(hosts.top-refresh.top)<2 && Math.abs(refresh.right-controls.getBoundingClientRect().right)<2,"Dashboard hosts/refresh are not aligned left/right on the same row: "+JSON.stringify({hosts:hosts.toJSON(),refresh:refresh.toJSON(),controls:controls.getBoundingClientRect().toJSON(),width:innerWidth}));
+                            assert(hosts.left<refresh.left && Math.abs(hosts.top-refresh.top)<2 && Math.abs(refresh.right-(controls.getBoundingClientRect().right-parseFloat(getComputedStyle(controls).paddingRight)-1))<2,"Dashboard hosts/refresh are not aligned left/right on the same row: "+JSON.stringify({hosts:hosts.toJSON(),refresh:refresh.toJSON(),controls:controls.getBoundingClientRect().toJSON(),width:innerWidth}));
                         }
                         if(tab === "settings")assert(document.querySelector("[data-restore-server]").textContent===t("restoreServer") && document.querySelector("[data-restore-config]").textContent===t("restoreConfig"),"Missing translated restore controls");
                         if(tab === "queries") {
@@ -137,7 +176,7 @@ func TestNativeDesktop(t *testing.T) {
                             assert(document.querySelector(".query-result svg")?.getAttribute("aria-hidden")==="true","Query status icon lacks accessible text handling");
                             assert(document.querySelector('[data-query-action="allow"]').textContent===t("allow") && document.querySelector('[data-query-action="deny"]').textContent===t("deny"),"Missing translated query actions");
                         }
-                        assert(document.title==="Pi-Manager" && document.querySelector("header h1").textContent.startsWith("Pi-Manager"),"App branding changed during translation");
+                        assert(document.title===t(tab)+" · Pi-Manager" && document.querySelector("header h1").textContent.startsWith("Pi-Manager"),"App branding changed during translation");
                         if(tab!=="dashboard")assert(document.querySelector(".view-heading") && document.querySelector(".view-icon svg"),"Missing workspace styling: "+tab);
                         assert(document.querySelector("#tabs [data-tab=queries]").textContent===t("queries"),"Tab was not translated");
                         const content = document.getElementById("tabContent").innerText;
@@ -219,7 +258,7 @@ func TestNativeDesktop(t *testing.T) {
                 document.querySelector("[data-clear-drift]").click();assert(document.querySelector("[data-apply-sync]").disabled,"Clear selection did not disable sync");
                 document.querySelector("[data-select-drift]").click();
                 assert(document.querySelectorAll("tbody tr[data-key]").length===1,"Unexpected drift rows");
-                window.confirm=()=>true;document.querySelector("[data-apply-sync]").click();
+                window.confirmAction=()=>true;document.querySelector("[data-apply-sync]").click();
                 await wait(()=>document.querySelector("[data-sync-status]").textContent===t("syncDone",{applied:1,failed:0}));
                 document.querySelector("[data-preview-sync]").click();await wait(()=>!document.querySelector("[data-preview-sync]").disabled);
                 assert(document.querySelector("[data-sync-status]").textContent===t("syncSummary",{changes:0,conflicts:0}),"Sync did not resolve DNS drift");
@@ -273,7 +312,7 @@ func TestNativeDesktop(t *testing.T) {
                 queryRules=await queryDomains("1");assert(queryRules.filter(item=>item.domain==="example.com").length===1 && queryRules.find(item=>item.domain==="example.com").type==="deny","Query deny retained a conflicting exact allow rule");
                 window.nativeRequest=async(...args)=>args[1].startsWith("/domains/") && args[2]==="POST" ? {status:200,body:'{"processed":{"errors":[{"error":"query rule rejected"}]}}'} : originalQueryRequest(...args);
                 queryRow("2:2").querySelector('[data-query-action="allow"]').click();await wait(()=>!queryRow("2:2").querySelector('[data-query-action="allow"]').disabled);
-                assert(document.getElementById("toastArea").textContent.includes("query rule rejected"),"Per-item query rule rejection was hidden");
+                assert(document.getElementById("errorArea").textContent.includes("query rule rejected"),"Per-item query rule rejection was hidden");
                 assert(!(await queryDomains("2")).some(item=>item.domain==="older.example.com"),"Rejected query action changed the server");
                 window.nativeRequest=async(...args)=>{
                     const result=await originalQueryRequest(...args);
@@ -311,7 +350,7 @@ func TestNativeDesktop(t *testing.T) {
                 assert(preserved.enabled===false && preserved.comment==="keep comment" && preserved.groups[0]===3,"Toggle lost domain metadata");
                 document.querySelector("[data-values]").value="reject.example";
                 domainForm.requestSubmit();
-                await wait(()=>document.getElementById("toastArea").textContent.includes(t("failedChanges",{n:1})));
+                await wait(()=>document.getElementById("errorArea").textContent.includes(t("failedChanges",{n:1})));
                 const firstPartial=JSON.parse((await nativeRequest("1","/domains","GET","",false)).body);
                 const secondPartial=JSON.parse((await nativeRequest("2","/domains","GET","",false)).body);
                 assert(firstPartial.domains.some(d=>d.domain==="reject.example") && !secondPartial.domains.some(d=>d.domain==="reject.example"),"Partial failure was not reflected per server");
@@ -363,9 +402,14 @@ func TestNativeDesktop(t *testing.T) {
                 await wait(()=>document.querySelectorAll("tbody tr[data-key]").length===4);
                 assert(document.getElementById("recordForm")===listForm && listFilter.value==="example.com","List add reset the page");
                 await switchTab("hosts");
-                window.prompt=()=>"192.168.1.99";
                 document.querySelector('[data-record-server="1"] [data-action=edit]').click();
-                await wait(()=>document.getElementById("toastArea").textContent.includes(t("restored")));
+                await wait(()=>document.getElementById("dnsEditAddress"));
+                const dnsEditor=document.getElementById("dnsEditAddress");
+                assert(document.activeElement===dnsEditor && dnsEditor.value==="192.168.1.3","DNS editor did not focus the current address");
+                dnsEditor.value="invalid-address";document.querySelector("#actionDialog form").requestSubmit();
+                assert(document.getElementById("actionDialog").open && !dnsEditor.validity.valid,"DNS editor accepted an invalid address");
+                dnsEditor.value="192.168.1.99";dnsEditor.dispatchEvent(new Event("input"));document.querySelector("#actionDialog form").requestSubmit();
+                await wait(()=>document.getElementById("errorArea").textContent.includes(t("restored")));
                 const dns=JSON.parse((await nativeRequest("1","/config/dns/hosts","GET","",false)).body);
                 assert(dns.config.dns.hosts.includes("192.168.1.3 nas.home"),"DNS rollback did not restore the original value");
                 const quickCases=[
@@ -392,13 +436,13 @@ func TestNativeDesktop(t *testing.T) {
                     assert(syncButton.disabled,"Resource sync accepted no selected secondaries");
                     target.checked=true;target.dispatchEvent(new Event("change"));
                     assert(!syncButton.disabled,"Resource sync ignored selected secondary");
-                    window.confirm=()=>false;syncButton.click();
+                    window.confirmAction=()=>false;syncButton.click();
                     await wait(()=>!syncButton.disabled && document.querySelector("[data-record-sync-status]").textContent===t("syncCancelled"));
                     let secondary=recordItems(kind,await api(serverById("2"),RECORD_PATHS[kind]));
                     assert(!secondary.some(item=>recordKey(kind,item)===recordKey(kind,source)),"Cancelling resource sync mutated the secondary");
                     const originalPreview=window.nativePreviewSync;let previewArgs,confirmation;
                     window.nativePreviewSync=(...args)=>{previewArgs=args;return originalPreview(...args)};
-                    window.confirm=message=>{confirmation=message;return true};
+                    window.confirmAction=message=>{confirmation=message;return true};
                     syncButton.click();await wait(()=>!syncButton.disabled && document.querySelector("[data-record-sync-status]").textContent.startsWith("Applied:"));
                     window.nativePreviewSync=originalPreview;
                     assert(JSON.stringify(previewArgs)==='[["2"],["'+kind+'"],false]',"Resource sync scope included another resource, main target, or mirror deletions");
@@ -543,12 +587,13 @@ func TestNativeDesktop(t *testing.T) {
                 restoreInput.files=restoreFiles.files;
                 document.querySelector("[data-restore-target]").value="2";
                 for(const input of document.querySelectorAll("[data-restore-section]"))input.checked=input.dataset.restoreSection==="domains";
-                const realConfirm=window.confirm;let restoreConfirmation="";
-                window.confirm=message=>{restoreConfirmation=message;return false};
+                const realConfirm=window.confirmAction;let restoreConfirmation="";
+                window.confirmAction=message=>{restoreConfirmation=message;return false};
                 document.querySelector("[data-restore-server-form]").requestSubmit();
                 assert(!restoreState.running && !restoreState.result && restoreConfirmation.includes("two.test") && restoreConfirmation.includes("server-backup.zip"),"Restore did not confirm target and file or ignored cancellation");
-                window.confirm=()=>true;
+                window.confirmAction=()=>true;
                 document.querySelector("[data-restore-server-form]").requestSubmit();
+                await Promise.resolve();
                 assert(restoreState.running && document.querySelector("[data-restore-config]").disabled && restoreInput.disabled,"Restore allowed concurrent jobs");
                 await switchTab("dashboard");
                 await wait(()=>!restoreState.running);
@@ -559,22 +604,28 @@ func TestNativeDesktop(t *testing.T) {
                 restoreAppFiles.items.add(new File([JSON.stringify({servers:desktopConfig.servers,preferences:{ph_combo_language:"sv",ph_combo_theme:"light"}})],"settings.json",{type:"application/json"}));
                 document.querySelector("[data-restore-json]").files=restoreAppFiles.files;
                 document.querySelector("[data-restore-config-form]").requestSubmit();
+                await Promise.resolve();
                 await wait(()=>!restoreState.running);
                 assert(!restoreState.error && currentLanguage==="sv" && document.documentElement.dataset.theme==="light" && document.querySelector("[data-restore-status]").textContent.includes(".json") && state.servers.every(s=>!s.connected),"App settings restore did not apply preferences, reset sessions and show previous-config backup");
                 await Promise.all(state.servers.map(s=>login(s,s.password)));await setLanguage("en");
-                window.confirm=realConfirm;
+                window.confirmAction=realConfirm;
                 for(let n=2;n<10;n++)document.getElementById("desktopAdd").click();
                 assert(document.querySelectorAll("#desktopServers [data-server]").length===10 && document.getElementById("desktopAdd").disabled,"Settings must allow ten servers");
                 const role=document.querySelector('[data-server="10"] [data-role]');role.value="main";role.dispatchEvent(new Event("change",{bubbles:true}));
                 assert(document.querySelector('[data-server="1"] [data-role]').value==="secondary","Choosing a main left two main servers");
                 document.getElementById("desktopSettings").requestSubmit();await wait(()=>state.servers.length===10 && state.servers[9].role==="main");
                 try {await fetch("/api10/auth");throw new Error("Unconfigured host 10 accepted")}catch(error){assert(error.message.includes("Settings"),"Transport did not route server ID 10")}
-                for(const width of [400,650,1000]) {
+                for(const width of [320,400,650,1000]) {
                     await smokeResize(width,1000);await wait(()=>Math.abs(innerWidth-width)<5);
+                    assert(document.getElementById("workspaceNav").hidden && document.getElementById("workspaceNav").inert,"Closed navigation exposes hidden controls");
+                    document.getElementById("navigationToggle").focus();document.getElementById("navigationToggle").click();
+                    assert(document.getElementById("workspaceNav").getAttribute("aria-modal")==="true" && document.getElementById("tabContent").closest("[inert]"),"Narrow navigation is not modal");
+                    document.activeElement.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));
+                    assert(document.getElementById("workspaceNav").hidden && !document.getElementById("tabContent").closest("[inert]") && document.activeElement.id==="navigationToggle","Navigation Escape did not close and restore focus");
                     for(const tab of ["settings","dashboard","queries","domains","hosts","clients","lists","gravity","drift"]) {
                         await switchTab(tab);
                         const main=document.getElementById("tabContent"),header=document.querySelector("header");
-                        assert(main.scrollWidth<=innerWidth+1,"Page overflow at "+width+"/"+tab+": "+main.scrollWidth);
+                        assert(main.scrollWidth<=innerWidth+1,"Page overflow at "+width+"/"+tab+": "+main.scrollWidth+" "+JSON.stringify([...main.querySelectorAll("*")].filter(element=>element.clientWidth>0 && element.scrollWidth>element.clientWidth+1).slice(0,12).map(element=>({tag:element.tagName,class:element.className,text:element.textContent.slice(0,60),right:element.getBoundingClientRect().right,scrollWidth:element.scrollWidth,width:element.clientWidth,overflow:getComputedStyle(element).overflowX}))));
                         assert(header.scrollWidth<=innerWidth+1,"Header overflow at "+width+"/"+tab);
                     }
                 }

@@ -7,7 +7,7 @@ import (
 
 func TestEmbeddedDashboardUsesNativeConfiguration(t *testing.T) {
 	html := desktopHTML(Config{Servers: []Server{{ID: "4", Label: `Name </script><script>alert(1)</script>`, URL: "https://pi.hole/api"}}, Preferences: map[string]string{"ph_combo_theme": "light"}})
-	for _, expected := range []string{`<title>Pi-Manager</title>`, `<h1>Pi-Manager `, `"id":"4"`, `"url":"https://pi.hole/api"`, "bootstrap().catch(showError)", "nativeLogin", "connect-src 'none'", "4.4.1", "max-width:none", "Ελληνικά", "Svenska"} {
+	for _, expected := range []string{`<title>Pi-Manager</title>`, `<h1>Pi-Manager `, `data-theme="light" data-sk-theme="light"`, `data-sk-density="dense"`, `"id":"4"`, `"url":"https://pi.hole/api"`, "bootstrap().catch(showError)", "nativeLogin", "connect-src 'none'", "4.4.1", "max-width:none", "Ελληνικά", "Svenska", "Sekura.createDrawer", "Sekura.createDialog", "Sekura.createToaster"} {
 		if !strings.Contains(html, expected) {
 			t.Error("missing", expected)
 		}

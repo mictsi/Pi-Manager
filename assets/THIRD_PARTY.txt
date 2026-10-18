@@ -307,3 +307,13 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+Sekura Design System reference assets (3.2.0)
+============================================
+
+Source: https://apps.tsiortos.com/sekuradesign
+CSS: https://apps.tsiortos.com/sekuradesign/css/sekura.css
+Behaviours: https://apps.tsiortos.com/sekuradesign/js/sekura.iife.min.js
+
+Unmodified upstream reference assets are embedded in the interface.
+Pi-Manager's MIT license does not relicense third-party assets.
+

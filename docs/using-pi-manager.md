@@ -2,6 +2,23 @@
 
 [Documentation](../README.md#documentation)
 
+## Navigation and appearance
+
+The Sekura interface uses a navigation rail on wide windows and a menu drawer
+on smaller windows. Open the drawer with the menu button; Escape closes it and
+returns focus to that button. The content uses the available window width.
+
+Use the header theme button to switch between light and dark mode. Dense mode
+is the default. The header density button switches between dense and comfortable
+spacing; **Settings → Appearance** also offers compact spacing. Preferences are
+saved locally. Appearance shows the running build and interface revision, which
+help identify the executable when comparing builds.
+
+Tab moves through controls. Press Enter or Space on a focused table heading to
+sort. Confirmation dialogs focus Cancel first and follow the active theme.
+Notifications pause while hovered or focused and can be dismissed. Errors stay
+visible above the content until dismissed.
+
 ## Dashboard and queries
 
 The top row shows server status. Dashboard cards and graphs combine the selected

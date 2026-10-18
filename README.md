@@ -17,6 +17,9 @@ whose shared dashboard made managing two Pi-hole instances simpler. Thank you to
 the original project and its contributors for the foundation and inspiration,
 and to the [Pi-hole project](https://pi-hole.net/) and its community.
 
+The interface uses the [Sekura Design System](https://apps.tsiortos.com/sekuradesign)
+for shared styles, themes and accessible interactions.
+
 ## Features
 
 - **A fleet-wide dashboard.** Combined query statistics, blocking trends and
@@ -31,7 +34,8 @@ and to the [Pi-hole project](https://pi-hole.net/) and its community.
 - **Background monitoring.** Minimize to the tray and keep monitoring server
   status, blocking, CPU, memory, load and temperature where available.
 - **A dashboard that fits.** Responsive views use the whole window, with English,
-  Danish, Greek and Swedish interfaces.
+  Danish, Greek and Swedish interfaces, light and dark themes, and adjustable
+  density with dense mode as the default.
 - **Portable configuration.** Addresses, roles, saved passwords and preferences
   live in `config.json` beside the executable, alongside rotating logs.
 

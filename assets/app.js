@@ -32,12 +32,82 @@ function humanError(error) {
     if (message.includes("Gravity stream interrupted")) return t("interrupted");
     return t("serverError", {message});
 }
+let notifications, navigation;
+const narrowWorkspace=matchMedia("(max-width:1023px)");
+function statusIcon(kind) {
+    const paths=kind === "ok" ? '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>' : kind === "err" ? '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 17h.01"/>' : '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>';
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
 function toast(message, kind = "") {
-    const element = document.createElement("div");
-    element.className = "toast " + kind;
-    element.textContent = message;
-    $("#toastArea").append(element);
-    setTimeout(() => element.remove(), 6000);
+    // Actionable failures remain visible beside the workspace until dismissed;
+    // they never wait in the transient success-notification queue.
+    if(kind === "err") {
+        const region=$("#errorArea");
+        const existing=$$("[data-error-message]",region).find(element=>element.textContent === message);
+        if(existing)return ()=>existing.closest(".workspace-error").remove();
+        const alert=document.createElement("div");alert.className="workspace-error";
+        alert.innerHTML=`<span class="toast-icon">${statusIcon("err")}</span><p data-error-message></p><button type="button" class="sk-icon-button" aria-label="${textHTML("dismissNotification")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>`;
+        $("[data-error-message]",alert).textContent=message;
+        const dismiss=()=>{const focused=alert.contains(document.activeElement);alert.remove();if(focused)$("#tabContent").focus({preventScroll:true});};
+        $("button",alert).onclick=dismiss;region.append(alert);alert.scrollIntoView({block:"nearest"});
+        return dismiss;
+    }
+    notifications ||= Sekura.createToaster($("#toastArea"));
+    return notifications.show(message,{duration:kind === "err" ? 0 : 6000,render:()=>{
+        const element=document.createElement("div");element.className="toast sk-toast "+kind;
+        element.innerHTML=`<span class="toast-icon">${statusIcon(kind)}</span><p class="sk-toast__message"></p><button type="button" class="sk-icon-button sk-toast__dismiss" data-sk-toast-dismiss aria-label="${textHTML("dismissNotification")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>`;
+        $(".sk-toast__message",element).textContent=message;
+        return element;
+    }});
+}
+function confirmAction(message,{title=t("confirmAction"),action=t("continueAction"),danger=false}={}) {
+    // Keep one decision in flight. A second click must not stack dialogs or
+    // approve another operation when the first decision completes.
+    if($("#actionDialog"))return Promise.resolve(false);
+    return new Promise(resolve=>{
+        const dialog=document.createElement("dialog");dialog.id="actionDialog";dialog.className="sk-dialog";
+        dialog.setAttribute("aria-labelledby","actionDialogTitle");dialog.setAttribute("aria-describedby","actionDialogMessage");
+        dialog.innerHTML=`<div class="sk-dialog__panel"><div class="sk-dialog__header"><h2 class="sk-dialog__title" id="actionDialogTitle"></h2></div><div class="sk-dialog__body"><p class="confirmation-message" id="actionDialogMessage"></p></div><div class="sk-dialog__footer"><button type="button" class="sk-button btn" data-confirm-cancel autofocus>${textHTML("cancel")}</button><button type="button" class="sk-button btn ${danger ? "danger" : "primary"}" data-confirm-accept></button></div></div>`;
+        $("#actionDialogTitle",dialog).textContent=title;$("#actionDialogMessage",dialog).textContent=message;$("[data-confirm-accept]",dialog).textContent=action;
+        document.body.append(dialog);
+        let accepted=false;
+        const controller=Sekura.createDialog(dialog,{onOpenChange:open=>{
+            if(!open){controller.destroy();dialog.remove();resolve(accepted);}
+        }});
+        $("[data-confirm-cancel]",dialog).onclick=()=>controller.close();
+        $("[data-confirm-accept]",dialog).onclick=()=>{accepted=true;controller.close();};
+        controller.show();
+    });
+}
+function initWorkspace() {
+    if(navigation)return;
+    const trigger=$("#navigationToggle");
+    navigation=Sekura.createDrawer($("#workspaceNav"),{modal:"(max-width:1023px)",onOpenChange:open=>trigger.setAttribute("aria-expanded",String(open && narrowWorkspace.matches))});
+    const adapt=()=>{if(narrowWorkspace.matches)navigation.close();else navigation.show();};
+    narrowWorkspace.addEventListener("change",adapt);adapt();
+    trigger.onclick=()=>navigation.open ? navigation.close() : navigation.show();
+    $("#navigationClose").onclick=()=>navigation.close();
+    $("#skipLink").onclick=event=>{event.preventDefault();$("#tabContent").focus();};
+    $("#tabContent").addEventListener("keydown",event=>{
+        if(event.target.matches("th[data-sort]") && (event.key === "Enter" || event.key === " ")){event.preventDefault();event.target.click();}
+    });
+}
+function applyWorkspaceTheme() {
+    const theme=localStorage.getItem("ph_combo_theme") === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme=theme;
+    document.documentElement.dataset.skTheme=matchMedia("(prefers-contrast:more)").matches ? "hc-"+theme : theme;
+}
+function setWorkspaceDensity(value) {
+    const density=["comfortable","compact","dense"].includes(value) ? value : "dense";
+    document.documentElement.dataset.skDensity=density;
+    savePreference("density",density);
+    $("#densityToggle").setAttribute("aria-pressed",String(density === "dense"));
+    const control=$("[data-interface-density]");if(control)control.value=density;
+}
+matchMedia("(prefers-contrast:more)").addEventListener("change",()=>{applyWorkspaceTheme();state.page?.redraw?.();});
+function chartPalette() {
+    const style=getComputedStyle(document.documentElement);
+    return Array.from({length:8},(_,index)=>style.getPropertyValue("--sk-color-chart-"+(index+1)).trim());
 }
 function showError(error) { toast(humanError(error), "err"); }
 function serverById(id) { return state.servers.find(s => s.id === id); }
@@ -77,7 +147,6 @@ function healthText(h) {
 function renderPills() {
     updateViewChrome(state.page?.container);
     const pills = $("#serverPills");
-    $(".topbar-row").insertBefore(pills,$(".topbar-actions"));
     setHTML(pills,state.servers.map(s => {
         const h=hostHealth.get(s.id),online=h?.sampledAt ? h.reachable : s.connected;
         const status=s.checking ? "connecting" : !online ? (h?.sampledAt ? "unreachable" : "disconnected") : !s.connected ? "disconnected" : h?.blocking === "disabled" ? "disabled" : "connected";
@@ -86,9 +155,27 @@ function renderPills() {
 }
 
 function renderShell() {
+    initWorkspace();
     document.documentElement.lang = currentLanguage;
-    document.documentElement.dataset.theme = localStorage.getItem("ph_combo_theme") || "dark";
-    $("header h1").innerHTML = `Pi-Manager <span class="dim">· ${textHTML("dashboard")}</span>`;
+    applyWorkspaceTheme();
+    document.title=t(state.activeTab)+" · Pi-Manager";
+    $("header h1").innerHTML = `Pi-Manager <span class="dim">· ${textHTML(state.activeTab)}</span>`;
+    $("#skipLink").textContent=t("skipToContent");
+    $("#workspaceNav").ariaLabel=t("primaryNavigation");
+    $("#tabs").ariaLabel=t("primaryNavigation");
+    $("#navigationToggle").title=$("#navigationToggle").ariaLabel=t("openNavigation");
+    $("#navigationClose").ariaLabel=t("closeNavigation");
+    $("#toastArea").ariaLabel=t("notifications");
+    $("#serverPills").ariaLabel=t("serverStatus");
+    const storedDensity=preference("density","dense");
+    const density=["comfortable","compact","dense"].includes(storedDensity) ? storedDensity : "dense";
+    document.documentElement.dataset.skDensity=density;
+    $("#densityToggle").setAttribute("aria-pressed",String(density === "dense"));
+    $("#densityToggle").title=$("#densityToggle").ariaLabel=t("denseDensity");
+    $("#densityToggle").onclick=()=>{
+        const dense=document.documentElement.dataset.skDensity !== "dense";
+        setWorkspaceDensity(dense ? "dense" : "comfortable");
+    };
     const language = $("#languageSelect");
     language.innerHTML = '<option value="en">English</option><option value="da">Dansk</option><option value="el">Ελληνικά</option><option value="sv">Svenska</option>';
     language.value = currentLanguage;
@@ -97,12 +184,19 @@ function renderShell() {
     $("#themeToggle").title = $("#themeToggle").ariaLabel = t("theme");
     $("#themeToggle").onclick = () => {
         const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-        document.documentElement.dataset.theme = theme;
         localStorage.setItem("ph_combo_theme", theme);
-        state.page?.refresh?.();
+        applyWorkspaceTheme();
+        state.page?.redraw?.();
     };
-    setHTML($("#tabs"), TAB_IDS.map(id => `<button data-tab="${id}" class="${id === state.activeTab ? "active" : ""}">${textHTML(id)}</button>`).join(""));
-    $("#tabs").onclick = event => { const button = event.target.closest("[data-tab]"); if (button) switchTab(button.dataset.tab).catch(showError); };
+    const groups=[["monitor",["dashboard","queries"]],["configuration",["domains","hosts","clients","lists"]],["operations",["gravity","drift"]],["",["settings"]]];
+    // Retain the focused nav button across page changes and translations.
+    const focused=document.activeElement?.closest("#tabs [data-tab]")?.dataset.tab;
+    setHTML($("#tabs"),groups.map(([label,ids])=>`<div class="nav-group">${label ? `<span class="nav-group-label">${textHTML(label)}</span>` : ""}${ids.map(id=>`<button type="button" data-tab="${id}" class="${id === state.activeTab ? "active" : ""}" ${id === state.activeTab ? 'aria-current="page"' : ""}>${viewIcon(id)}<span>${textHTML(id)}</span></button>`).join("")}</div>`).join(""));
+    if(focused)$(`[data-tab="${focused}"]`,$("#tabs"))?.focus({preventScroll:true});
+    $("#tabs").onclick = event => { const button = event.target.closest("[data-tab]"); if (button) {
+        if(narrowWorkspace.matches)navigation.close();
+        switchTab(button.dataset.tab).then(()=>$("#tabContent").focus({preventScroll:true})).catch(showError);
+    }};
     renderPills();
 }
 async function setLanguage(language, render = true) {
@@ -135,6 +229,7 @@ async function switchTab(tab) {
     } catch (error) { if (page.active) { container.textContent = humanError(error); showError(error); } }
 }
 const VIEW_ICONS={
+    dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     queries:'<path d="M4 5h16M4 12h10M4 19h6"/><circle cx="18" cy="17" r="3"/><path d="m20 19 2 3"/>',
     domains:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18"/>',
     hosts:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/>',
@@ -151,7 +246,7 @@ function updateSetupNotice(container) {
     if(state.activeTab === "settings" || !pending.length){notice?.remove();return;}
     if(!notice) {
         notice=document.createElement("div");notice.className="notice setup-notice";notice.dataset.setupNotice="";notice.setAttribute("role","status");
-        notice.innerHTML='<div><strong data-setup-servers></strong><p data-setup-message></p></div><button class="btn xs" data-open-settings></button>';
+        notice.innerHTML='<div><strong data-setup-servers></strong><p data-setup-message></p></div><button class="sk-button btn xs" data-open-settings></button>';
         const heading=$(".view-heading",container);if(heading)heading.after(notice);else container.prepend(notice);
         $("[data-open-settings]",notice).onclick=async event=>{
             event.preventDefault();event.stopPropagation();
@@ -177,12 +272,12 @@ function updateViewChrome(container) {
     if(empty && table)empty.hidden=!!$("tbody tr",table);
 }
 function renderViewChrome(container,tab) {
-    if(tab === "dashboard"){updateSetupNotice(container);return;}
     container.classList.add("workspace-view","view-"+tab);
     const heading=document.createElement("div");heading.className="view-heading";
-    heading.innerHTML=`<div class="view-title-group"><span class="view-icon">${viewIcon(tab)}</span><div><span class="overview-eyebrow">${textHTML("workspace")}</span><h2>${textHTML(tab)}</h2><p>${textHTML(tab+"Intro")}</p></div></div><div class="view-facts"><div><span>${textHTML("viewConnections")}</span><strong data-view-connections></strong></div><div><span>${textHTML("main")}</span><strong data-view-main></strong></div>${container._visibleCount!==undefined ? `<div><span>${textHTML("viewRecords")}</span><strong data-view-count></strong></div>` : ""}</div>`;
+    heading.innerHTML=`<div class="view-title-group"><span class="view-icon">${viewIcon(tab)}</span><div><h2>${textHTML(tab)}</h2><p>${textHTML(tab+"Intro")}</p></div></div><div class="view-facts"><div><span>${textHTML("viewConnections")}</span><strong data-view-connections></strong></div><div><span>${textHTML("main")}</span><strong data-view-main></strong></div>${container._visibleCount!==undefined ? `<div><span>${textHTML("viewRecords")}</span><strong data-view-count></strong></div>` : ""}</div>`;
     container.prepend(heading);
     const table=$(".datatable",container);
+    for(const heading of $$("th[data-sort]",container))heading.tabIndex=0;
     if(table){const empty=document.createElement("p");empty.className="table-empty";empty.dataset.viewEmpty="";empty.textContent=t("noMatches");table.closest(".table-wrap").after(empty);}
     updateViewChrome(container);
 }
@@ -190,7 +285,7 @@ function renderViewChrome(container,tab) {
 function refreshControls(key) {
     const options = [[500,"realtime"], [1000,"oneSecond"], [2000,"seconds"], [5000,"seconds"], [10000,"seconds"], [15000,"seconds"], [30000,"seconds"], [60000,"minute"], [0,"paused"]];
     const selected = preference(key+"_interval", 2000);
-    return `<label>${textHTML("refreshRate")} <select class="refresh-interval" aria-label="${textHTML("refreshRate")}">${options.map(([value,label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${textHTML(label,{n:value/1000})}</option>`).join("")}</select></label><button class="btn" data-refresh>${textHTML("refresh")}</button><span class="status-line" data-refresh-status></span>`;
+    return `<label>${textHTML("refreshRate")} <select class="sk-select refresh-interval" aria-label="${textHTML("refreshRate")}">${options.map(([value,label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${textHTML(label,{n:value/1000})}</option>`).join("")}</select></label><button class="sk-button btn" data-refresh>${textHTML("refresh")}</button><span class="status-line" data-refresh-status></span>`;
 }
 async function startPolling(page, container, key, refresh) {
     let interval = preference(key+"_interval", 2000);
@@ -221,7 +316,7 @@ async function startPolling(page, container, key, refresh) {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.page?.refresh) state.page.refresh(); });
 function settingsLoginHTML(server) {
-    return `<form class="login-form" data-loginform="${server.id}"><input type="password" autocomplete="current-password" aria-label="${textHTML("password")}" placeholder="${textHTML("password")}" data-loginpw="${server.id}"><button class="btn primary xs">${textHTML("login")}</button></form>${server.error ? `<p class="sub">${escapeHtml(server.error)}</p>` : ""}`;
+    return `<form class="login-form" data-loginform="${server.id}"><input class="sk-input" type="password" autocomplete="current-password" aria-label="${textHTML("password")}" placeholder="${textHTML("password")}" data-loginpw="${server.id}"><button class="sk-button btn primary xs">${textHTML("login")}</button></form>${server.error ? `<p class="sub">${escapeHtml(server.error)}</p>` : ""}`;
 }
 function bindSettingsLogins(container, page) {
     container.addEventListener("submit", async event => {
@@ -234,12 +329,12 @@ function bindSettingsLogins(container, page) {
         finally { button.disabled = false; }
     });
 }
-function field(label, html, extra="") { return `<label class="field ${extra}"><span>${textHTML(label)}</span>${html}</label>`; }
+function field(label, html, extra="") { return `<label class="sk-field field ${extra}"><span>${textHTML(label)}</span>${html}</label>`; }
 function targetPicker(ids = state.servers.map(s => s.id)) {
     return `<fieldset class="target-picker"><legend>${textHTML("targets")}</legend>${state.servers.map(s => `<label><input type="checkbox" data-target="${s.id}" ${ids.includes(s.id) ? "checked" : ""}>${escapeHtml(s.label)}</label>`).join("")}</fieldset>`;
 }
 function selectedTargets(container) { return $$("[data-target]:checked",container).map(input => serverById(input.dataset.target)); }
-function pagerHTML() { return `<div class="pager"><span data-count class="count-note"></span><button class="btn xs" data-previous>${textHTML("previous")}</button><span data-page></span><button class="btn xs" data-next>${textHTML("next")}</button></div>`; }
+function pagerHTML() { return `<div class="pager"><span data-count class="count-note"></span><button class="sk-button btn xs" data-previous>${textHTML("previous")}</button><span data-page></span><button class="sk-button btn xs" data-next>${textHTML("next")}</button></div>`; }
 function updatePager(container, model, count) {
     container._visibleCount=count;updateViewChrome(container);
     const pages = Math.max(1, Math.ceil(count/model.pageSize));
@@ -337,7 +432,7 @@ function dashboardMetrics(combined,servers,data) {
     const mainLabel=blocklist.main?.label || t("main");
     const blocklistBadge=blocklist.count===null ? "unavailable" : blocklist.drift.length ? "blocklistCountDrift" : blocklist.unknown.length ? "comparisonIncomplete" : "main";
     const warnings=[...(blocklist.count===null ? [t("mainBlocklistUnavailable",{main:mainLabel})] : []),...(blocklist.drift.length ? [t("blocklistCountWarning",{main:mainLabel,count:fmtNum(blocklist.count),servers:blocklist.drift.map(server=>server.label+" ("+fmtNum(server.count)+")").join(", ")})] : []),...(blocklist.unknown.length ? [t("blocklistCompareUnknown",{servers:blocklist.unknown.join(", ")})] : [])];
-    const color=server=>["#5b8def","#e3b341","#c297ff","#ff8a3d","#56d4dd","#ff8a5b","#c297ff","#df86b9","#80c98f","#e2bc65"][(Number(server.id)-1)%10];
+    const colors=chartPalette(),color=server=>colors[(Number(server.id)-1)%colors.length];
     const shares=(key,value,totalValue)=>`<div class="metric-share" role="img" aria-label="${escapeHtml(available.map(server=>server.label+": "+fmtNum(value(data.get(server.id)))).join("; "))}">${available.map((server,index)=>`<span title="${escapeHtml(server.label+": "+fmtNum(value(data.get(server.id))))}" style="flex:${totalValue ? Math.max(0,value(data.get(server.id))) : 0};background:${color(server)}"></span>`).join("")}</div><span class="metric-footnote">${textHTML(key)}</span>`;
     const tile=(key,value,visual,extra="")=>`<article class="metric-tile metric-${key} ${extra}"><div class="metric-title"><span>${textHTML(key)}</span><span class="metric-icon">${metricIcon(key)}</span></div><div class="big-num metric-value">${escapeHtml(value)}</div>${visual}</article>`;
     return `<div class="overview-heading"><div><span class="overview-eyebrow">Pi-hole</span><h2>${textHTML("combined")}</h2></div><span class="coverage-chip"><span class="coverage-dot"></span>${textHTML("hostCoverage",{n:available.length,total:servers.length})}</span></div><div class="metric-grid">
@@ -346,12 +441,11 @@ function dashboardMetrics(combined,servers,data) {
         ${tile("activeClients",fmtNum(combined.summary.clients.active),shares("fromSelectedHosts",item=>Number(item.summary?.clients?.active)||0,combined.summary.clients.active))}
         <article class="metric-tile metric-blockedPercent"><div class="metric-title"><span>${textHTML("blockedPercent")}</span><span class="metric-icon">${metricIcon("blockedPercent")}</span></div><div class="metric-ring" style="--ring-value:${percent}%" role="img" aria-label="${textHTML("blockedPercent")}: ${escapeHtml(fmtNum(percent.toFixed(1)))} %"><div><span class="metric-ring-value">${fmtNum(percent.toFixed(1))}</span><span class="metric-ring-unit">%</span></div></div></article>
         ${tile("blocklistDomains",blocklist.count===null ? "—" : fmtNum(blocklist.count),`<div class="main-source"><span class="main-source-mark">${metricIcon("blocklistDomains")}</span><div><b>${escapeHtml(mainLabel)}</b><span>${textHTML("mainBlocklistSource")}</span></div></div><span class="metric-footnote ${blocklist.drift.length || blocklist.unknown.length || blocklist.count===null ? "warning-text" : ""}">${textHTML(blocklistBadge)}</span>`,"metric-main-blocklist") }
-        </div>${warnings.length ? `<div class="notice warning blocklist-warning" role="status"><span class="notice-icon">${metricIcon("blocked")}</span><div>${warnings.map(warning=>`<p>${escapeHtml(warning)}</p>`).join("")}</div><button class="btn xs" data-open-drift>${textHTML("drift")}</button></div>` : ""}<div class="host-contribution"><span class="metric-footnote">${textHTML("hostContribution")}</span><div class="host-contribution-items">${available.map((server,index)=>{const count=Number(data.get(server.id)?.summary?.queries?.total)||0;return `<span class="host-contribution-item"><i style="background:${color(server)}"></i>${escapeHtml(server.label)}<b>${fmtNum((total ? count*100/total : 0).toFixed(1))}%</b></span>`}).join("") || `<span class="count-note">${textHTML("empty")}</span>`}</div></div>`;
+        </div>${warnings.length ? `<div class="notice warning blocklist-warning" role="status"><span class="notice-icon">${metricIcon("blocked")}</span><div>${warnings.map(warning=>`<p>${escapeHtml(warning)}</p>`).join("")}</div><button class="sk-button btn xs" data-open-drift>${textHTML("drift")}</button></div>` : ""}<div class="host-contribution"><span class="metric-footnote">${textHTML("hostContribution")}</span><div class="host-contribution-items">${available.map((server,index)=>{const count=Number(data.get(server.id)?.summary?.queries?.total)||0;return `<span class="host-contribution-item"><i style="background:${color(server)}"></i>${escapeHtml(server.label)}<b>${fmtNum((total ? count*100/total : 0).toFixed(1))}%</b></span>`}).join("") || `<span class="count-note">${textHTML("empty")}</span>`}</div></div>`;
 }
 
 async function renderDashboard(container,page) {
     const data=new Map(),charts=new Map();
-    const palette=["#5b8def","#e05252","#3fb950","#d29922","#c297ff","#56d4dd","#ff8a5b","#8b98a5"];
     let selected=preference("dashboard_hosts",null);
     if(selected!==null)selected=selected.filter(id=>state.servers.some(s=>s.id === id));
     const selectedServers=()=>state.servers.filter(s=>selected===null || selected.includes(s.id));
@@ -359,20 +453,22 @@ async function renderDashboard(container,page) {
     const sectionOpen=key=>preference(foldPreference(key),key === "details");
     container.innerHTML=`<div class="dashboard-controls"><div class="target-picker dashboard-hosts" role="group" aria-label="${textHTML("hostFilter")}"><span class="count-note">${textHTML("hostFilter")}</span><label><input type="checkbox" data-all-hosts ${selected === null ? "checked" : ""}>${textHTML("allHosts")}</label>${state.servers.map(s=>`<label><input type="checkbox" data-dashboard-host="${s.id}" ${selected===null || selected.includes(s.id) ? "checked" : ""}>${escapeHtml(s.label)}</label>`).join("")}</div><div class="toolbar dashboard-refresh">${refreshControls("dashboard")}</div></div>
         <div class="combined-summary" id="summaryCombined"></div><p class="count-note">${textHTML("sumNote")}</p>
-        <div class="server-grid" id="dashGrid">${state.servers.map(s=>`<div class="card" id="summary${s.id}"></div>`).join("")}</div>
-        <details class="fold" data-fold="details" ${sectionOpen("details") ? "open" : ""}><summary>${textHTML("details")}</summary><div class="chart-grid">${["history","clientHistory","queryTypes","upstreams"].map(key=>`<div class="card chart-panel"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div class="chart-box"><canvas id="chart-${key}-combined" aria-label="${textHTML(key)}"></canvas></div></div>`).join("")}</div></details>
-        <details class="fold" data-fold="top" ${sectionOpen("top") ? "open" : ""}><summary>${textHTML("topPanels")}</summary><div class="chart-grid">${["topDomains","topBlocked","topClients"].map(key=>`<div class="card"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div id="${key}combined"></div></div>`).join("")}</div></details>`;
+        <div class="server-grid" id="dashGrid">${state.servers.map(s=>`<div class="sk-card card" id="summary${s.id}"></div>`).join("")}</div>
+        <details class="fold" data-fold="details" ${sectionOpen("details") ? "open" : ""}><summary>${textHTML("details")}</summary><div class="chart-grid">${["history","clientHistory","queryTypes","upstreams"].map(key=>`<div class="sk-card card chart-panel"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div class="chart-box"><canvas id="chart-${key}-combined" aria-label="${textHTML(key)}"></canvas></div></div>`).join("")}</div></details>
+        <details class="fold" data-fold="top" ${sectionOpen("top") ? "open" : ""}><summary>${textHTML("topPanels")}</summary><div class="chart-grid">${["topDomains","topBlocked","topClients"].map(key=>`<div class="sk-card card"><h2>${textHTML("combined")} · ${textHTML(key)}</h2><p class="count-note" data-chart-coverage="${key}"></p><div id="${key}combined"></div></div>`).join("")}</div></details>`;
     page.dispose=()=>{for(const chart of charts.values())chart.destroy()};
     const stat=(key,value)=>`<div class="stat-row"><span class="k">${textHTML(key)}</span><span class="v">${escapeHtml(value)}</span></div>`;
     function updateChart(key,type,labels,datasets) {
         if(!page.active)return;
-        const id=`chart-${key}-combined`,color=getComputedStyle(document.documentElement).getPropertyValue("--text").trim();
-        const options={responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{labels:{color}}}};
-        if(type === "bar")options.scales={x:{stacked:true,ticks:{color,maxTicksLimit:8}},y:{stacked:true,beginAtZero:true,ticks:{color}}};
+        const style=getComputedStyle(document.documentElement),id=`chart-${key}-combined`,color=style.getPropertyValue("--sk-color-chart-label").trim(),grid=style.getPropertyValue("--sk-color-chart-grid").trim();
+        const options={responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{position:"bottom",labels:{color,usePointStyle:true,boxWidth:8,padding:16}}}};
+        if(type === "bar")options.scales={x:{stacked:true,ticks:{color,maxTicksLimit:8},grid:{display:false},border:{display:false}},y:{stacked:true,beginAtZero:true,ticks:{color},grid:{color:grid},border:{display:false}}};
+        else {options.cutout="72%";options.elements={arc:{borderWidth:2,borderColor:style.getPropertyValue("--sk-color-surface-raised").trim()}};}
         if(charts.has(id)){const chart=charts.get(id);chart.data.labels=labels;chart.data.datasets=datasets;chart.options=options;chart.update("none")}
         else charts.set(id,new Chart(document.getElementById(id),{type,data:{labels,datasets},options}));
     }
     function draw() {
+        const colors=chartPalette(),palette=[colors[0],colors[3],colors[5],colors[2],colors[4],colors[1],colors[6],colors[7]];
         const servers=selectedServers(),items=servers.filter(s=>s.connected).map(s=>data.get(s.id)).filter(Boolean),combined=combineDashboard(items),q=combined.summary.queries;
         setHTML($("#summaryCombined",container),dashboardMetrics(combined,servers,data));
         for(const server of state.servers) {
@@ -383,7 +479,7 @@ async function renderDashboard(container,page) {
             else if(!q)html+=`<p class="sub">${textHTML("unavailable")}</p>`;
             else {
                 const enabled=item.blocking?.blocking === "enabled";
-                html+=`<div class="big-num">${fmtNum(q.total)}</div><p class="sub">${textHTML("queriesToday")}</p>${stat("blocked",fmtNum(q.blocked))}${stat("lastGravity",fmtDate(item.summary.gravity?.last_update))}<div class="record-actions"><button class="btn xs ${enabled ? "danger" : "success"}" data-blocking="${server.id}" data-enable="${!enabled}">${textHTML(enabled ? "disableBlocking" : "enableBlocking")}</button></div>`;
+                html+=`<div class="big-num">${fmtNum(q.total)}</div><p class="sub">${textHTML("queriesToday")}</p>${stat("blocked",fmtNum(q.blocked))}${stat("lastGravity",fmtDate(item.summary.gravity?.last_update))}<div class="record-actions"><button class="sk-button btn xs ${enabled ? "danger" : "success"}" data-blocking="${server.id}" data-enable="${!enabled}">${textHTML(enabled ? "disableBlocking" : "enableBlocking")}</button></div>`;
             }
             setHTML(card,html);
         }
@@ -432,6 +528,7 @@ async function renderDashboard(container,page) {
         catch(error){showError(error)}finally{button.disabled=false}
     });
     draw();
+    page.redraw=draw;
     await startPolling(page,container,"dashboard",async()=>{
         const errors=[],details=$("[data-fold=details]",container).open,top=$("[data-fold=top]",container).open;
         await Promise.all(state.servers.filter(s=>s.connected).map(async server=>{
@@ -485,16 +582,16 @@ async function renderQueries(container, page) {
     let resetRequested = true, limited = false;
     const option = (value,label,selected) => `<option value="${escapeHtml(value)}" ${String(value) === String(selected) ? "selected" : ""}>${escapeHtml(label)}</option>`;
     container.innerHTML = `<div class="toolbar">
-        <label>${textHTML("range")}<select data-range>${[[1,"hour"],[6,"hours"],[24,"hours"],[72,"days"],[168,"days"]].map(([n,key])=>option(n,t(key,{n:n>24?n/24:n}),model.range)).join("")}</select></label>
-        <label>${textHTML("filter")}<input type="text" data-filter value="${escapeHtml(model.filter)}" placeholder="${textHTML("filterHint")}"></label>
-        <label>${textHTML("server")}<select data-server-filter>${option("all",t("all"),model.server)}${state.servers.map(s=>option(s.id,s.label,model.server)).join("")}</select></label>
-        <label>${textHTML("client")}<select data-client-filter></select></label>
-        <label>${textHTML("type")}<select data-type-filter></select></label>
-        <label>${textHTML("status")}<select data-status-filter></select></label>
-        <label>${textHTML("perPage")}<select data-page-size>${[25,50,100,250,1000].map(n=>option(n,n,model.pageSize)).join("")}</select></label>
+        <label>${textHTML("range")}<select class="sk-select" data-range>${[[1,"hour"],[6,"hours"],[24,"hours"],[72,"days"],[168,"days"]].map(([n,key])=>option(n,t(key,{n:n>24?n/24:n}),model.range)).join("")}</select></label>
+        <label>${textHTML("filter")}<input class="sk-input" type="text" data-filter value="${escapeHtml(model.filter)}" placeholder="${textHTML("filterHint")}"></label>
+        <label>${textHTML("server")}<select class="sk-select" data-server-filter>${option("all",t("all"),model.server)}${state.servers.map(s=>option(s.id,s.label,model.server)).join("")}</select></label>
+        <label>${textHTML("client")}<select class="sk-select" data-client-filter></select></label>
+        <label>${textHTML("type")}<select class="sk-select" data-type-filter></select></label>
+        <label>${textHTML("status")}<select class="sk-select" data-status-filter></select></label>
+        <label>${textHTML("perPage")}<select class="sk-select" data-page-size>${[25,50,100,250,1000].map(n=>option(n,n,model.pageSize)).join("")}</select></label>
         <span class="spacer"></span>${refreshControls("queries")}
-        </div><div class="card"><p class="sub">${textHTML("queryActionsHelp")}</p><div class="table-wrap queries-table"><table class="datatable"><thead><tr>${["time","server","client","domain","type","queryResult","status"].map(key=>`<th data-sort="${key}" aria-sort="none">${textHTML(key)}</th>`).join("")}<th>${textHTML("actions")}</th></tr></thead><tbody></tbody></table></div>
-        ${pagerHTML()}<button class="btn xs" data-load-more>${textHTML("loadMore")}</button><p class="sub" data-query-note></p></div>`;
+        </div><div class="sk-card card"><p class="sub">${textHTML("queryActionsHelp")}</p><div class="sk-table table-wrap queries-table"><table class="datatable"><thead><tr>${["time","server","client","domain","type","queryResult","status"].map(key=>`<th data-sort="${key}" aria-sort="none">${textHTML(key)}</th>`).join("")}<th>${textHTML("actions")}</th></tr></thead><tbody></tbody></table></div>
+        ${pagerHTML()}<button class="sk-button btn xs" data-load-more>${textHTML("loadMore")}</button><p class="sub" data-query-note></p></div>`;
     const tbody = $("tbody",container);
     function remember() { savePreference("queries",model); }
     function updateOptions(selector, values, selected, label = value => value) {
@@ -517,7 +614,7 @@ async function renderQueries(container, page) {
         const visible = filtered.slice(model.page*model.pageSize,(model.page+1)*model.pageSize);
         reconcileRows(tbody,visible.map(q=>{
             const outcome=queryOutcome(q.status),domain=queryDomainName(q),busy=changingDomains.has(q.server.id+":"+domain.toLowerCase());
-            const actions=["allow","deny"].map(action=>`<button class="btn xs query-${action}" data-query-action="${action}" title="${textHTML("queryDomainAction",{action:t(action),domain:domain || q.domain,server:q.server.label})}" aria-label="${textHTML("queryDomainAction",{action:t(action),domain:domain || q.domain,server:q.server.label})}" ${!domain || !q.server.connected || busy ? "disabled" : ""}>${queryStatusIcon(action === "allow" ? "allowed" : "blocked")}${textHTML(action)}</button>`).join("");
+            const actions=["allow","deny"].map(action=>`<button class="sk-button btn xs query-${action}" data-query-action="${action}" title="${textHTML("queryDomainAction",{action:t(action),domain:domain || q.domain,server:q.server.label})}" aria-label="${textHTML("queryDomainAction",{action:t(action),domain:domain || q.domain,server:q.server.label})}" ${!domain || !q.server.connected || busy ? "disabled" : ""}>${queryStatusIcon(action === "allow" ? "allowed" : "blocked")}${textHTML(action)}</button>`).join("");
             return {key:q._key,html:`<td>${escapeHtml(new Date(q.time*1000).toLocaleString(localeCode()))}</td><td><span class="server-chip s${q.server.id}">${escapeHtml(q.server.label)}</span></td><td title="${escapeHtml(q.client?.ip)}">${escapeHtml(clientNames.get(q.client?.ip)||q.client?.name||q.client?.ip||"–")}</td><td class="mono query-domain">${escapeHtml(q.domain)}</td><td>${escapeHtml(q.type)}</td><td><span class="query-result">${queryStatusIcon(outcome)}${escapeHtml(queryOutcomeLabel(outcome))}</span></td><td title="${escapeHtml(q.status)}">${escapeHtml(statusLabel(q.status))}</td><td><div class="query-domain-actions">${actions}</div></td>`};
         }));
         for(const row of $$("tr[data-key]",tbody))row.dataset.queryOutcome=queryOutcome(rows.get(row.dataset.key).status);
@@ -655,6 +752,28 @@ function validIPAddress(value) {
     if (!value.includes(":")) return false;
     try {new URL("http://["+value+"]/");return true;} catch {return false;}
 }
+function editDNSAddress(record) {
+    if($("#actionDialog"))return Promise.resolve(null);
+    return new Promise(resolve=>{
+        const dialog=document.createElement("dialog");dialog.id="actionDialog";dialog.className="sk-dialog";
+        dialog.setAttribute("aria-labelledby","actionDialogTitle");
+        dialog.setAttribute("aria-describedby","actionDialogMessage");
+        dialog.innerHTML=`<form class="sk-dialog__panel"><div class="sk-dialog__header"><h2 class="sk-dialog__title" id="actionDialogTitle">${textHTML("edit")}</h2></div><div class="sk-dialog__body"><p id="actionDialogMessage"></p><label class="sk-field field" for="dnsEditAddress">${textHTML("ip")}<input id="dnsEditAddress" type="text" required autofocus autocomplete="off" spellcheck="false"></label></div><div class="sk-dialog__footer"><button type="button" class="sk-button btn" data-confirm-cancel>${textHTML("cancel")}</button><button type="submit" class="sk-button btn primary">${textHTML("saveChanges")}</button></div></form>`;
+        $("#actionDialogMessage",dialog).textContent=t("dnsEdit",{domain:record.name});
+        const input=$("input",dialog);input.value=record.ip;
+        let value=null;
+        document.body.append(dialog);
+        const controller=Sekura.createDialog(dialog,{onOpenChange:open=>{if(!open){controller.destroy();dialog.remove();resolve(value);}}});
+        $("[data-confirm-cancel]",dialog).onclick=()=>controller.close();
+        input.oninput=()=>input.setCustomValidity("");
+        $("form",dialog).onsubmit=event=>{
+            event.preventDefault();
+            if(!validIPAddress(input.value.trim())){input.setCustomValidity(t("dnsInvalid"));input.reportValidity();return;}
+            value=input.value.trim();controller.close();
+        };
+        controller.show();input.select();
+    });
+}
 function wildcardDomain(value) {
     return "(\\.|^)"+value.replace(/^\*\./,"").replace(/\./g,"\\.")+"$";
 }
@@ -674,22 +793,22 @@ async function renderRecords(container, page, kind) {
     let merged = new Map(), visible = [], working = false;
     const toggleable = kind === "domains" || kind === "lists";
     const options = (values, selectedValue) => values.map(([value,key])=>`<option value="${value}" ${value === selectedValue ? "selected" : ""}>${textHTML(key)}</option>`).join("");
-    container.innerHTML = `<div class="card"><h2>${textHTML("addMany")} · ${textHTML(kind)}</h2>
+    container.innerHTML = `<div class="sk-card card"><h2>${textHTML("addMany")} · ${textHTML(kind)}</h2>
         <form class="record-form" id="recordForm">
-        ${field(kind === "hosts" ? "dnsValues" : "values",`<textarea data-values required aria-label="${textHTML("values")}" placeholder="${kind === "hosts" ? "192.168.1.50 nas.home" : kind === "lists" ? "https://example.com/hosts" : kind === "clients" ? "192.168.1.50" : "ads.example.com"}"></textarea>`,"values-field")}
-        ${toggleable ? field("type",`<select data-record-type>${options(kind === "domains" ? [["deny","deny"],["allow","allow"]] : [["block","deny"],["allow","allow"]],kind === "domains" ? "deny" : "block")}</select>`) : ""}
-        ${kind === "domains" ? field("kind",`<select data-record-kind>${options([["exact","exact"],["regex","regex"]],"exact")}</select>`) : ""}
-        ${kind !== "hosts" ? field("comment",'<input type="text" data-comment>') : ""}
-        <button class="btn primary" type="submit">${textHTML("add")}</button>
+        ${field(kind === "hosts" ? "dnsValues" : "values",`<textarea class="sk-textarea" data-values required aria-label="${textHTML("values")}" placeholder="${kind === "hosts" ? "192.168.1.50 nas.home" : kind === "lists" ? "https://example.com/hosts" : kind === "clients" ? "192.168.1.50" : "ads.example.com"}"></textarea>`,"values-field")}
+        ${toggleable ? field("type",`<select class="sk-select" data-record-type>${options(kind === "domains" ? [["deny","deny"],["allow","allow"]] : [["block","deny"],["allow","allow"]],kind === "domains" ? "deny" : "block")}</select>`) : ""}
+        ${kind === "domains" ? field("kind",`<select class="sk-select" data-record-kind>${options([["exact","exact"],["regex","regex"]],"exact")}</select>`) : ""}
+        ${kind !== "hosts" ? field("comment",'<input class="sk-input" type="text" data-comment>') : ""}
+        <button class="sk-button btn primary" type="submit">${textHTML("add")}</button>
         ${kind === "domains" ? `<div class="wildcard-option"><label><input type="checkbox" data-domain-wildcard aria-describedby="domainWildcardHelp"><span>${textHTML("addDomainWildcard")}</span></label><p class="sub" id="domainWildcardHelp">${textHTML("domainWildcardHelp")}</p></div>` : ""}</form>
         <div style="margin-top:12px">${targetPicker(model.targets)}</div>
-        <div class="resource-sync"><p class="sub">${textHTML("syncResourceHelp")}</p><div class="toolbar"><button class="btn" data-sync-secondaries>${textHTML("syncSecondaries")}</button><span class="status-line" role="status" data-record-sync-status></span></div><p class="sub sync-errors" role="alert" data-record-sync-errors></p></div></div>
-        <div class="card" style="margin-top:14px"><div class="toolbar"><label>${textHTML("filter")}<input type="text" data-record-filter value="${escapeHtml(model.filter)}" placeholder="${textHTML("filterHint")}"></label>
-        <label>${textHTML("perPage")}<select data-record-size>${[25,50,100,250,1000].map(n=>`<option value="${n}" ${n === model.pageSize ? "selected" : ""}>${n}</option>`).join("")}</select></label><button class="btn" data-refresh-records>${textHTML("refresh")}</button><span class="status-line" data-record-status></span></div>
-        <div class="bulk-toolbar"><span data-selected>${textHTML("selected",{n:0})}</span><button class="btn xs" data-bulk="clear">${textHTML("clearSelection")}</button>
-        ${toggleable ? `<button class="btn xs" data-bulk="enable">${textHTML("enableSelected")}</button><button class="btn xs" data-bulk="disable">${textHTML("disableSelected")}</button>` : ""}
-        <button class="btn xs" data-bulk="copy">${textHTML("copySelected")}</button><button class="btn xs danger" data-bulk="delete">${textHTML("deleteSelected")}</button></div>
-        <div class="table-wrap records"><table class="datatable"><thead><tr><th><input type="checkbox" data-select-all aria-label="${textHTML("selectAll")}"></th>
+        <div class="resource-sync"><p class="sub">${textHTML("syncResourceHelp")}</p><div class="toolbar"><button class="sk-button btn" data-sync-secondaries>${textHTML("syncSecondaries")}</button><span class="status-line" role="status" data-record-sync-status></span></div><p class="sub sync-errors" role="alert" data-record-sync-errors></p></div></div>
+        <div class="sk-card card" style="margin-top:14px"><div class="toolbar"><label>${textHTML("filter")}<input class="sk-input" type="text" data-record-filter value="${escapeHtml(model.filter)}" placeholder="${textHTML("filterHint")}"></label>
+        <label>${textHTML("perPage")}<select class="sk-select" data-record-size>${[25,50,100,250,1000].map(n=>`<option value="${n}" ${n === model.pageSize ? "selected" : ""}>${n}</option>`).join("")}</select></label><button class="sk-button btn" data-refresh-records>${textHTML("refresh")}</button><span class="status-line" data-record-status></span></div>
+        <div class="bulk-toolbar"><span data-selected>${textHTML("selected",{n:0})}</span><button class="sk-button btn xs" data-bulk="clear">${textHTML("clearSelection")}</button>
+        ${toggleable ? `<button class="sk-button btn xs" data-bulk="enable">${textHTML("enableSelected")}</button><button class="sk-button btn xs" data-bulk="disable">${textHTML("disableSelected")}</button>` : ""}
+        <button class="sk-button btn xs" data-bulk="copy">${textHTML("copySelected")}</button><button class="sk-button btn xs danger" data-bulk="delete">${textHTML("deleteSelected")}</button></div>
+        <div class="sk-table table-wrap records"><table class="datatable"><thead><tr><th><input type="checkbox" data-select-all aria-label="${textHTML("selectAll")}"></th>
         <th data-sort="name">${textHTML(kind === "hosts" || kind === "domains" ? "domain" : kind === "clients" ? "identifier" : "url")}</th>
         ${toggleable ? `<th data-sort="type">${textHTML("type")}</th>` : ""}${kind === "domains" ? `<th data-sort="kind">${textHTML("kind")}</th>` : ""}
         ${kind !== "hosts" ? `<th data-sort="comment">${textHTML("comment")}</th>` : ""}
@@ -713,12 +832,12 @@ async function renderRecords(container, page, kind) {
         const cells = state.servers.map(server => {
             const value = row.byServer.get(server.id);
             if (!loaded.has(server.id)) return `<td><span class="sub">${textHTML(server.connected ? "unavailable" : "disconnected")}</span></td>`;
-            if (!value) return `<td data-record-server="${server.id}"><span class="badge off">${textHTML("missing")}</span><div class="record-actions"><button class="btn xs" data-action="copy">${textHTML("add")}</button></div></td>`;
-            if (kind === "hosts") return `<td data-record-server="${server.id}"><span class="mono">${escapeHtml(value.ip)}</span><div class="record-actions"><button class="btn xs" data-action="edit">${textHTML("edit")}</button><button class="btn xs" data-action="sync" title="${textHTML("copyFrom")}">${textHTML("copy")}</button><button class="btn xs danger" data-action="delete">${textHTML("delete")}</button></div></td>`;
+            if (!value) return `<td data-record-server="${server.id}"><span class="badge off">${textHTML("missing")}</span><div class="record-actions"><button class="sk-button btn xs" data-action="copy">${textHTML("add")}</button></div></td>`;
+            if (kind === "hosts") return `<td data-record-server="${server.id}"><span class="mono">${escapeHtml(value.ip)}</span><div class="record-actions"><button class="sk-button btn xs" data-action="edit">${textHTML("edit")}</button><button class="sk-button btn xs" data-action="sync" title="${textHTML("copyFrom")}">${textHTML("copy")}</button><button class="sk-button btn xs danger" data-action="delete">${textHTML("delete")}</button></div></td>`;
             const enabled = value.enabled !== false;
-            return `<td data-record-server="${server.id}"><span class="badge ${enabled ? "on" : "off"}">${textHTML(enabled ? "enabled" : "disabled")}</span><div class="record-actions">${toggleable ? `<button class="btn xs" data-action="${enabled ? "disable" : "enable"}">${textHTML(enabled ? "disable" : "enable")}</button>` : ""}<button class="btn xs danger" data-action="delete">${textHTML("delete")}</button></div></td>`;
+            return `<td data-record-server="${server.id}"><span class="badge ${enabled ? "on" : "off"}">${textHTML(enabled ? "enabled" : "disabled")}</span><div class="record-actions">${toggleable ? `<button class="sk-button btn xs" data-action="${enabled ? "disable" : "enable"}">${textHTML(enabled ? "disable" : "enable")}</button>` : ""}<button class="sk-button btn xs danger" data-action="delete">${textHTML("delete")}</button></div></td>`;
         }).join("");
-        return checkbox+common+cells+`<td class="row-actions"><button class="btn xs danger" data-action="delete-row">${textHTML("delete")}</button></td>`;
+        return checkbox+common+cells+`<td class="row-actions"><button class="sk-button btn xs danger" data-action="delete-row">${textHTML("delete")}</button></td>`;
     }
     function draw() {
         if (!page.active) return;
@@ -774,7 +893,8 @@ async function renderRecords(container, page, kind) {
         const targets = ids ? state.servers.filter(s=>ids.includes(s.id)) : selectedTargets(container);
         if (!targets.length) return toast(t("selectTargets"),"err");
         if (!keys.length) return toast(t("selectRows"),"err");
-        if (action === "delete" && !window.confirm(t("deleteConfirm",{n:keys.length}))) return;
+        if (action === "delete" && !await confirmAction(t("deleteConfirm",{n:keys.length}),{title:t("delete"),action:t("delete"),danger:true})) return;
+        if(!page.active)return;
         await runChanges(async (execute, conflict) => {
             for (const key of keys) {
                 const row = merged.get(key);if (!row) continue;
@@ -788,7 +908,7 @@ async function renderRecords(container, page, kind) {
                             ? sendRecordRequest(server,recordCreateRequest(kind,source))
                             : nativeCopyRecord(sourceId || row.sourceId,server.id,kind,source));
                         else if (kind === "hosts" && existing.ip !== source.ip) {
-                            if (action === "sync" && window.confirm(t("dnsReplaceConfirm",{server:server.label}))) await execute(server,()=>replaceDNS(server,existing,source));
+                            if (action === "sync" && await confirmAction(t("dnsReplaceConfirm",{server:server.label}),{title:t("hosts"),action:t("copy"),danger:true}) && page.active) await execute(server,()=>replaceDNS(server,existing,source));
                             else conflict();
                         }
                     }
@@ -810,7 +930,7 @@ async function renderRecords(container, page, kind) {
             const problems=plan.rows.filter(row=>row.status === "conflict" || row.status === "unavailable").map(row=>`${serverById(row.serverId)?.label || row.serverId}: ${row.problem || t("drift_"+row.status)}`);
             errors.textContent=problems.join("\n");status.textContent=t("syncSummary",plan);
             if(!changes.length)return;
-            if(!window.confirm(t("syncResourceConfirm",{n:changes.length,resource:t(kind),main:main.label,servers:targets.map(s=>s.label).join(", "),conflicts:plan.conflicts})+"\n"+t("upsertMode"))){status.textContent=t("syncCancelled");return;}
+            if(!await confirmAction(t("syncResourceConfirm",{n:changes.length,resource:t(kind),main:main.label,servers:targets.map(s=>s.label).join(", "),conflicts:plan.conflicts})+"\n"+t("upsertMode"),{title:t("syncSecondaries"),action:t("applySync")})){status.textContent=t("syncCancelled");return;}
             if(!page.active)return;
             status.textContent=t("loading");
             const result=await nativeApplySync(plan.token,changes.map(row=>row.id));
@@ -870,9 +990,8 @@ async function renderRecords(container, page, kind) {
             const mode=action.dataset.action;
             if (mode === "edit") {
                 const existing=merged.get(key).byServer.get(id),server=serverById(id);
-                const ip=window.prompt(t("dnsEdit",{domain:existing.name}),existing.ip);
-                if (ip && !validIPAddress(ip.trim())) {toast(t("dnsInvalid"),"err");return;}
-                if (ip && ip.trim() !== existing.ip) await runChanges(execute=>execute(server,()=>replaceDNS(server,existing,{...existing,ip:ip.trim(),raw:ip.trim()+" "+existing.name})));
+                const ip=await editDNSAddress(existing);
+                if (page.active && ip && ip !== existing.ip) await runChanges(execute=>execute(server,()=>replaceDNS(server,existing,{...existing,ip,raw:ip+" "+existing.name})));
             } else await perform(mode === "delete-row" ? "delete" : mode,[key],mode === "sync" || mode === "delete-row" ? undefined : [id],mode === "sync" ? id : undefined);
             return;
         }
@@ -892,7 +1011,7 @@ async function renderRecords(container, page, kind) {
             }} catch { /* Device suggestions are optional. */ }
         }));
         if (!page.active) return;
-        area.innerHTML=devices.size ? `<div class="table-wrap records"><table class="datatable"><thead><tr><th>${textHTML("identifier")}</th><th>${textHTML("knownNames")}</th><th>${textHTML("vendor")}</th><th>${textHTML("server")}</th><th>${textHTML("name")}</th><th>${textHTML("actions")}</th></tr></thead><tbody>${[...devices.values()].map((item,index)=>`<tr data-device="${index}"><td class="mono">${escapeHtml(item.id)}</td><td>${escapeHtml(item.names)}</td><td>${escapeHtml(item.macVendor)}</td><td>${escapeHtml(item.servers.join(", "))}</td><td><input type="text" data-device-name aria-label="${textHTML("name")}"></td><td><button class="btn xs" data-add-device="${index}">${textHTML("add")}</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="sub">${textHTML("empty")}</p>`;
+        area.innerHTML=devices.size ? `<div class="sk-table table-wrap records"><table class="datatable"><thead><tr><th>${textHTML("identifier")}</th><th>${textHTML("knownNames")}</th><th>${textHTML("vendor")}</th><th>${textHTML("server")}</th><th>${textHTML("name")}</th><th>${textHTML("actions")}</th></tr></thead><tbody>${[...devices.values()].map((item,index)=>`<tr data-device="${index}"><td class="mono">${escapeHtml(item.id)}</td><td>${escapeHtml(item.names)}</td><td>${escapeHtml(item.macVendor)}</td><td>${escapeHtml(item.servers.join(", "))}</td><td><input class="sk-input" type="text" data-device-name aria-label="${textHTML("name")}"></td><td><button class="sk-button btn xs" data-add-device="${index}">${textHTML("add")}</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="sub">${textHTML("empty")}</p>`;
         area.onclick=async event=>{
             const button=event.target.closest("[data-add-device]");if (!button) return;
             const item=[...devices.values()][Number(button.dataset.addDevice)],comment=$("[data-device-name]",button.closest("tr")).value.trim();
@@ -910,13 +1029,13 @@ async function renderDrift(container,page) {
     let plan=null,working=false,currentPage=0;
     const selected=new Set();
     const canSync=row=>row.status === "missing" || row.status === "changed" || (row.status === "extra" && plan?.mirror);
-    container.innerHTML=`<div class="card"><h2>${textHTML("drift")} · ${textHTML("main")}: ${escapeHtml(main?.label || "—")}</h2><p class="sub">${textHTML("syncHelp")}</p>
+    container.innerHTML=`<div class="sk-card card"><h2>${textHTML("drift")} · ${textHTML("main")}: ${escapeHtml(main?.label || "—")}</h2><p class="sub">${textHTML("syncHelp")}</p>
         <fieldset class="target-picker" data-sync-targets><legend>${textHTML("secondary")}</legend>${secondaries.map(s=>`<label><input type="checkbox" value="${s.id}" checked>${escapeHtml(s.label)}</label>`).join("") || `<p>${textHTML("noSecondary")}</p>`}</fieldset>
         <fieldset class="target-picker" data-sync-resources><legend>${textHTML("resource")}</legend>${resources.map(kind=>`<label><input type="checkbox" value="${kind}" checked>${textHTML(kind)}</label>`).join("")}</fieldset>
-        <div class="toolbar"><label><input type="checkbox" data-sync-mirror>${textHTML("mirror")}</label><button class="btn primary" data-preview-sync ${!secondaries.length ? "disabled" : ""}>${textHTML("previewSync")}</button><button class="btn" data-apply-sync disabled>${textHTML("applySelectedSync",{n:0})}</button></div><p role="status" data-sync-status></p><div role="alert" data-sync-errors></div></div>
-        <div class="card drift-results"><p class="sub">${textHTML("syncSelectionHelp")}</p><div class="toolbar"><label>${textHTML("filter")}<input type="text" data-drift-filter></label><label>${textHTML("hostFilter")}<select data-drift-host><option value="all">${textHTML("allHosts")}</option>${secondaries.map(s=>`<option value="${s.id}">${escapeHtml(s.label)}</option>`).join("")}</select></label><label>${textHTML("resource")}<select data-drift-resource><option value="all">${textHTML("all")}</option>${resources.map(kind=>`<option value="${kind}">${textHTML(kind)}</option>`).join("")}</select></label><label><input type="checkbox" data-differences checked>${textHTML("differencesOnly")}</label></div>
-        <div class="bulk-toolbar"><button class="btn xs" data-select-drift>${textHTML("selectFilteredChanges")}</button><button class="btn xs" data-clear-drift>${textHTML("clearSelection")}</button><span class="count-note" data-drift-selection role="status"></span></div>
-        <div class="table-wrap"><table class="datatable"><thead><tr><th><input type="checkbox" data-drift-select-all aria-label="${textHTML("selectFilteredChanges")}"></th><th>${textHTML("server")}</th><th>${textHTML("resource")}</th><th>${textHTML("name")}</th><th>${textHTML("status")}</th><th>${textHTML("main")}</th><th>${textHTML("secondary")}</th></tr></thead><tbody></tbody></table></div>${pagerHTML()}</div>`;
+        <div class="toolbar"><label><input type="checkbox" data-sync-mirror>${textHTML("mirror")}</label><button class="sk-button btn primary" data-preview-sync ${!secondaries.length ? "disabled" : ""}>${textHTML("previewSync")}</button><button class="sk-button btn" data-apply-sync disabled>${textHTML("applySelectedSync",{n:0})}</button></div><p role="status" data-sync-status></p><div role="alert" data-sync-errors></div></div>
+        <div class="sk-card card drift-results"><p class="sub">${textHTML("syncSelectionHelp")}</p><div class="toolbar"><label>${textHTML("filter")}<input class="sk-input" type="text" data-drift-filter></label><label>${textHTML("hostFilter")}<select class="sk-select" data-drift-host><option value="all">${textHTML("allHosts")}</option>${secondaries.map(s=>`<option value="${s.id}">${escapeHtml(s.label)}</option>`).join("")}</select></label><label>${textHTML("resource")}<select class="sk-select" data-drift-resource><option value="all">${textHTML("all")}</option>${resources.map(kind=>`<option value="${kind}">${textHTML(kind)}</option>`).join("")}</select></label><label><input type="checkbox" data-differences checked>${textHTML("differencesOnly")}</label></div>
+        <div class="bulk-toolbar"><button class="sk-button btn xs" data-select-drift>${textHTML("selectFilteredChanges")}</button><button class="sk-button btn xs" data-clear-drift>${textHTML("clearSelection")}</button><span class="count-note" data-drift-selection role="status"></span></div>
+        <div class="sk-table table-wrap"><table class="datatable"><thead><tr><th><input type="checkbox" data-drift-select-all aria-label="${textHTML("selectFilteredChanges")}"></th><th>${textHTML("server")}</th><th>${textHTML("resource")}</th><th>${textHTML("name")}</th><th>${textHTML("status")}</th><th>${textHTML("main")}</th><th>${textHTML("secondary")}</th></tr></thead><tbody></tbody></table></div>${pagerHTML()}</div>`;
     const status=$("[data-sync-status]",container),apply=$("[data-apply-sync]",container),preview=$("[data-preview-sync]",container);
     let filtered=[];
     function draw() {
@@ -950,7 +1069,7 @@ async function renderDrift(container,page) {
     preview.onclick=check;
     apply.onclick=async()=>{
         if(working || !plan || !selected.size)return;
-        if(!confirm(t("syncConfirm",{n:selected.size,main:main.label,mode:t(plan.mirror ? "selectedMirrorMode" : "upsertMode")})))return;
+        if(!await confirmAction(t("syncConfirm",{n:selected.size,main:main.label,mode:t(plan.mirror ? "selectedMirrorMode" : "upsertMode")}),{title:t("applySync"),action:t("applySelectedSync",{n:selected.size}),danger:plan.mirror}) || !page.active)return;
         working=true;lockInputs(true);draw();apply.disabled=true;preview.disabled=true;
         try {
             const result=await nativeApplySync(plan.token,[...selected]);plan=null;selected.clear();
@@ -1014,7 +1133,7 @@ async function performRestore(file,server,options) {
     if(server && (!server.connected || !RESTORE_SECTIONS.some(key=>options[key])))return;
     const target=server ? server.label+" ("+server.url+")" : t("restoreAppTarget");
     const sections=server ? RESTORE_SECTIONS.filter(key=>options[key]).map(key=>t("restoreSection_"+key)).join(", ") : t("restoreAppTarget");
-    if(!confirm(t("restoreConfirm",{file:file.name,target,sections})))return;
+    if(!await confirmAction(t("restoreConfirm",{file:file.name,target,sections}),{title:t(server ? "restoreServer" : "restoreConfig"),action:t(server ? "restoreServer" : "restoreConfig"),danger:true}) || restoreState.running)return;
     Object.assign(restoreState,{running:true,result:"",error:""});notifyBackup();
     try {
         let result;
@@ -1039,16 +1158,16 @@ async function performRestore(file,server,options) {
     finally {restoreState.running=false;notifyBackup();}
 }
 function renderRestore(container,page) {
-    const card=document.createElement("div");card.className="card restore-settings";container.append(card);
+    const card=document.createElement("div");card.className="sk-card card restore-settings";container.append(card);
     card.innerHTML=`<h2>${textHTML("restore")}</h2><p class="sub">${textHTML("restoreHelp")}</p><div class="restore-grid">
         <form data-restore-server-form><fieldset><legend>${textHTML("restoreServer")}</legend>
-        ${field("restoreTarget",'<select data-restore-target required></select>')}
+        ${field("restoreTarget",'<select class="sk-select" data-restore-target required></select>')}
         ${field("restoreZIP",'<input type="file" accept=".zip,application/zip" data-restore-zip required>')}
         <div class="restore-sections">${RESTORE_SECTIONS.map(key=>`<label><input type="checkbox" data-restore-section="${key}" ${key==="config" || key==="dhcp_leases" ? "" : "checked"}> ${textHTML("restoreSection_"+key)}</label>`).join("")}</div>
-        <p class="sub">${textHTML("restoreSectionsHelp")}</p><button class="btn" data-restore-server type="submit">${textHTML("restoreServer")}</button></fieldset></form>
+        <p class="sub">${textHTML("restoreSectionsHelp")}</p><button class="sk-button btn" data-restore-server type="submit">${textHTML("restoreServer")}</button></fieldset></form>
         <form data-restore-config-form><fieldset><legend>${textHTML("restoreConfig")}</legend>
         ${field("restoreJSON",'<input type="file" accept=".json,application/json" data-restore-json required>')}
-        <p class="sub">${textHTML("restoreConfigHelp")}</p><button class="btn" data-restore-config type="submit">${textHTML("restoreConfig")}</button></fieldset></form>
+        <p class="sub">${textHTML("restoreConfigHelp")}</p><button class="sk-button btn" data-restore-config type="submit">${textHTML("restoreConfig")}</button></fieldset></form>
         </div><p class="backup-result" data-restore-status role="status"></p>`;
     const target=$("[data-restore-target]",card);
     const update=()=>{
@@ -1073,8 +1192,8 @@ function renderRestore(container,page) {
 async function renderSettings(container, page) {
     let rows=desktopConfig.servers.map(s=>({...s}));
     let saving=false;
-    container.innerHTML=`<div class="card"><h2>${textHTML("serverSettings")}</h2><p class="sub">${textHTML("urlHelp")}</p><p class="sub">${textHTML("passwordHelp")}</p>
-        <p class="sub">${textHTML("roleHelp")}</p><form id="desktopSettings"><div id="desktopServers"></div><div class="toolbar"><button class="btn" type="button" id="desktopAdd">${textHTML("addServer")}</button><button class="btn primary" type="submit">${textHTML("save")}</button><span class="status-line" data-settings-status></span></div></form><p class="sub">${textHTML("logsHelp")}</p></div>`;
+    container.innerHTML=`<div class="sk-card card"><h2>${textHTML("serverSettings")}</h2><p class="sub">${textHTML("urlHelp")}</p><p class="sub">${textHTML("passwordHelp")}</p>
+        <p class="sub">${textHTML("roleHelp")}</p><form id="desktopSettings"><div id="desktopServers"></div><div class="toolbar"><button class="sk-button btn" type="button" id="desktopAdd">${textHTML("addServer")}</button><button class="sk-button btn primary" type="submit">${textHTML("save")}</button><span class="status-line" data-settings-status></span></div></form><p class="sub">${textHTML("logsHelp")}</p></div>`;
     const area=$("#desktopServers",container);
     page.updatePassword=(server,previousPassword)=>{
         if(!page.active)return;
@@ -1095,11 +1214,11 @@ async function renderSettings(container, page) {
     }
     function draw() {
         area.innerHTML=rows.map(s=>`<div class="server-setting" data-server="${s.id}"><span class="server-chip s${s.id}">${s.id}</span>
-            ${field("role",`<select data-role><option value="main" ${s.role === "main" ? "selected" : ""}>${textHTML("main")}</option><option value="secondary" ${s.role !== "main" ? "selected" : ""}>${textHTML("secondary")}</option></select>`)}
-            ${field("name",`<input type="text" data-name value="${escapeHtml(s.label)}" required>`)}
-            ${field("serverURL",`<input type="text" data-url value="${escapeHtml(s.url)}" placeholder="http://192.168.1.2/api">`,"url-field")}
-            ${field("password",'<input type="password" data-password autocomplete="new-password">',"password-field")}
-            <button class="btn danger" type="button" data-remove="${s.id}" ${rows.length === 1 ? "disabled" : ""}>${textHTML("remove")}</button></div>`).join("");
+            ${field("role",`<select class="sk-select" data-role><option value="main" ${s.role === "main" ? "selected" : ""}>${textHTML("main")}</option><option value="secondary" ${s.role !== "main" ? "selected" : ""}>${textHTML("secondary")}</option></select>`)}
+            ${field("name",`<input class="sk-input" type="text" data-name value="${escapeHtml(s.label)}" required>`)}
+            ${field("serverURL",`<input class="sk-input" type="text" data-url value="${escapeHtml(s.url)}" placeholder="http://192.168.1.2/api">`,"url-field")}
+            ${field("password",'<input class="sk-input" type="password" data-password autocomplete="new-password">',"password-field")}
+            <button class="sk-button btn danger" type="button" data-remove="${s.id}" ${rows.length === 1 ? "disabled" : ""}>${textHTML("remove")}</button></div>`).join("");
         for (const row of $$("[data-server]",area)) $("[data-password]",row).value=rows.find(s=>s.id === row.dataset.server).password || "";
         $("#desktopAdd",container).disabled=rows.length >= 10;
     }
@@ -1137,8 +1256,12 @@ async function renderSettings(container, page) {
         } catch (error) {if (page.active) status.textContent=t("saveError");showError(error);}
         finally {saving=false;page.drawHealth?.();}
     };
-    const exitSettings=document.createElement("div");exitSettings.className="card";container.append(exitSettings);
-    exitSettings.innerHTML=`<h2>${textHTML("exitBehavior")}</h2><p class="sub">${textHTML("exitBehaviorHelp")}</p>${field("exitBehavior",`<select data-exit-behavior><option value="ask">${textHTML("exitAsk")}</option><option value="exit">${textHTML("exitAlways")}</option><option value="cancel">${textHTML("exitNever")}</option></select>`)}`;
+    const appearance=document.createElement("div");appearance.className="sk-card card";container.append(appearance);
+    appearance.innerHTML=`<h2>${textHTML("appearance")}</h2><p class="sub" data-app-build>${textHTML("appBuild")}: <span class="mono">${escapeHtml(desktopBuild.version)} · ${escapeHtml(desktopBuild.uiRevision)}</span></p>${field("interfaceDensity",`<select class="sk-select" data-interface-density><option value="dense">${textHTML("denseDensity")}</option><option value="compact">${textHTML("compactDensity")}</option><option value="comfortable">${textHTML("comfortableDensity")}</option></select>`)}`;
+    $("[data-interface-density]",appearance).value=document.documentElement.dataset.skDensity;
+    $("[data-interface-density]",appearance).onchange=event=>setWorkspaceDensity(event.target.value);
+    const exitSettings=document.createElement("div");exitSettings.className="sk-card card";container.append(exitSettings);
+    exitSettings.innerHTML=`<h2>${textHTML("exitBehavior")}</h2><p class="sub">${textHTML("exitBehaviorHelp")}</p>${field("exitBehavior",`<select class="sk-select" data-exit-behavior><option value="ask">${textHTML("exitAsk")}</option><option value="exit">${textHTML("exitAlways")}</option><option value="cancel">${textHTML("exitNever")}</option></select>`)}`;
     const exitBehavior=$("[data-exit-behavior]",exitSettings);
     exitBehavior.value=["exit","cancel"].includes(desktopConfig.preferences.ph_combo_exit_decision) ? desktopConfig.preferences.ph_combo_exit_decision : "ask";
     exitBehavior.onchange=async()=>{
@@ -1147,12 +1270,12 @@ async function renderSettings(container, page) {
         catch(error){exitBehavior.value=desktopConfig.preferences.ph_combo_exit_decision || "ask";showError(error);}
         finally{exitBehavior.disabled=false;}
     };
-    const backups=document.createElement("div");backups.className="card backup-settings";container.append(backups);
-    backups.innerHTML=`<h2>${textHTML("backups")}</h2><p class="sub">${textHTML("backupHelp")}</p><p class="sub" data-backup-permissions>${textHTML("backupPermissions")}</p><div class="toolbar"><button class="btn primary" data-backup-all>${textHTML("backupAll")}</button><button class="btn" data-backup-config>${textHTML("backupConfig")}</button></div><p class="sub">${textHTML("backupLoginHelp")}</p><p class="backup-result" role="status" data-config-backup-status></p>`;
+    const backups=document.createElement("div");backups.className="sk-card card backup-settings";container.append(backups);
+    backups.innerHTML=`<h2>${textHTML("backups")}</h2><p class="sub">${textHTML("backupHelp")}</p><p class="sub" data-backup-permissions>${textHTML("backupPermissions")}</p><div class="toolbar"><button class="sk-button btn primary" data-backup-all>${textHTML("backupAll")}</button><button class="sk-button btn" data-backup-config>${textHTML("backupConfig")}</button></div><p class="sub">${textHTML("backupLoginHelp")}</p><p class="backup-result" role="status" data-config-backup-status></p>`;
     $("[data-backup-all]",backups).onclick=()=>Promise.all(state.servers.filter(s=>s.url && s.connected).map(backupServer));
     $("[data-backup-config]",backups).onclick=backupAppConfig;
     const drawRestore=renderRestore(container,page);
-    const health=document.createElement("div");health.className="card health-settings";container.append(health);
+    const health=document.createElement("div");health.className="sk-card card health-settings";container.append(health);
     health.innerHTML=`<h2>${textHTML("hostFilter")}</h2><p class="sub">${textHTML("backgroundHelp")}</p><p class="sub">${textHTML("logoutHelp")}</p>${!trayInfo.available ? `<p class="sub">${escapeHtml(t("trayUnavailable",{reason:trayInfo.reason}))}</p>` : ""}<div class="server-grid" data-health-grid></div>`;
     page.drawHealth=()=>{
         if(!page.active)return;
@@ -1165,10 +1288,10 @@ async function renderSettings(container, page) {
         for(const server of state.servers) {
             keep.add(server.id);
             let card=$(`[data-health-server="${server.id}"]`,grid);
-            if(!card){card=document.createElement("div");card.dataset.healthServer=server.id;card.innerHTML='<h3></h3><p class="health-metrics"></p><div class="health-actions"><div data-health-auth></div><button class="btn xs" data-server-backup="'+server.id+'"></button></div><p class="backup-result" role="status" data-server-backup-status></p>';grid.append(card);}
+            if(!card){card=document.createElement("div");card.dataset.healthServer=server.id;card.innerHTML='<h3></h3><p class="health-metrics"></p><div class="health-actions"><div data-health-auth></div><button class="sk-button btn xs" data-server-backup="'+server.id+'"></button></div><p class="backup-result" role="status" data-server-backup-status></p>';grid.append(card);}
             $("h3",card).textContent=server.label+" · "+t(server.role || "secondary");
             $(".health-metrics",card).textContent=healthText(hostHealth.get(server.id)) || t("loading");
-            setHTML($("[data-health-auth]",card),server.connected ? `<button class="btn xs" data-settings-logout="${server.id}">${textHTML("logout")}</button>` : settingsLoginHTML(server));
+            setHTML($("[data-health-auth]",card),server.connected ? `<button class="sk-button btn xs" data-settings-logout="${server.id}">${textHTML("logout")}</button>` : settingsLoginHTML(server));
             const stored=backupState.servers.get(server.id),value=stored?.url === server.url ? stored : null,backupButton=$("[data-server-backup]",card),status=$("[data-server-backup-status]",card);
             backupButton.textContent=t(value?.running ? "backupRunning" : "backupServer");backupButton.disabled=restoreState.running || !server.connected || !server.url || !!value?.running;
             status.textContent=backupStatus(value);status.classList.toggle("backup-error",!!value?.error);
@@ -1190,8 +1313,8 @@ async function renderSettings(container, page) {
 
 const gravityState = new Map();
 async function renderGravity(container, page) {
-    container.innerHTML=`<div class="card gravity-actions"><div class="toolbar"><button class="btn primary" data-gravity-all>${textHTML("updateGravityAll")}</button><span class="status-line" role="status" data-gravity-all-status></span></div><p class="sub">${textHTML("gravityAllHelp")}</p></div><div class="server-grid">${state.servers.map(s=>`<div class="card"><h2>${escapeHtml(s.label)} · ${textHTML("gravity")}</h2><div class="stat-row"><span class="k">${textHTML("lastGravity")}</span><span id="gravLast${s.id}">–</span></div>
-        <button class="btn primary block" id="gravBtn${s.id}" ${!s.connected || gravityState.get(s.id)?.running ? "disabled" : ""}>${textHTML(gravityState.get(s.id)?.running ? "running" : "updateGravity")}</button><pre class="log" id="gravLog${s.id}" style="margin-top:12px"></pre></div>`).join("")}</div>`;
+    container.innerHTML=`<div class="sk-card card gravity-actions"><div class="toolbar"><button class="sk-button btn primary" data-gravity-all>${textHTML("updateGravityAll")}</button><span class="status-line" role="status" data-gravity-all-status></span></div><p class="sub">${textHTML("gravityAllHelp")}</p></div><div class="server-grid">${state.servers.map(s=>`<div class="sk-card card"><h2>${escapeHtml(s.label)} · ${textHTML("gravity")}</h2><div class="stat-row"><span class="k">${textHTML("lastGravity")}</span><span id="gravLast${s.id}">–</span></div>
+        <button class="sk-button btn primary block" id="gravBtn${s.id}" ${!s.connected || gravityState.get(s.id)?.running ? "disabled" : ""}>${textHTML(gravityState.get(s.id)?.running ? "running" : "updateGravity")}</button><pre class="log" id="gravLog${s.id}" style="margin-top:12px"></pre></div>`).join("")}</div>`;
     function drawLog(server) {
         if (!page.active) return;
         const value=gravityState.get(server.id);
@@ -1249,27 +1372,40 @@ async function renderGravity(container, page) {
 }
 
 window.showExitDialog=()=>{
+    if(narrowWorkspace.matches)navigation?.close();
+    $("#actionDialog [data-confirm-cancel]")?.click();
     let dialog=$("#exitDialog");
-    if(dialog){dialog.focus();return;}
-    dialog=document.createElement("dialog");dialog.id="exitDialog";dialog.className="exit-dialog";
+    if(dialog){$("[data-exit-decision=cancel]",dialog).focus();return;}
+    dialog=document.createElement("dialog");dialog.id="exitDialog";dialog.className="sk-dialog sk-dialog--confirm";
     dialog.setAttribute("aria-labelledby","exitDialogTitle");dialog.setAttribute("aria-describedby","exitDialogHelp");
-    dialog.innerHTML=`<h2 id="exitDialogTitle">${textHTML("exitTitle")}</h2><p id="exitDialogHelp">${textHTML("exitWarning")}</p><label class="exit-remember"><input type="checkbox" data-exit-remember> ${textHTML("rememberDecision")}</label><p class="backup-result backup-error" role="alert" data-exit-error></p><div class="toolbar"><button class="btn" data-exit-decision="cancel" autofocus>${textHTML("cancel")}</button><button class="btn primary" data-exit-decision="exit">${textHTML("exit")}</button></div>`;
+    dialog.innerHTML=`<div class="sk-dialog__panel"><div class="sk-dialog__header"><span class="dialog-status-icon">${statusIcon("")}</span><h2 class="sk-dialog__title" id="exitDialogTitle">${textHTML("exitTitle")}</h2></div><div class="sk-dialog__body"><p id="exitDialogHelp">${textHTML("exitWarning")}</p><label class="exit-remember"><input type="checkbox" data-exit-remember> <span>${textHTML("rememberDecision")}</span></label><p class="backup-result backup-error" role="alert" data-exit-error hidden></p></div><div class="sk-dialog__footer"><button type="button" class="sk-button sk-button--secondary" data-exit-decision="cancel" autofocus>${textHTML("cancel")}</button><button type="button" class="sk-button sk-button--danger" data-exit-decision="exit">${textHTML("exit")}</button></div></div>`;
+    let controller;
     const decide=async decision=>{
         if(dialog.dataset.busy)return;
         dialog.dataset.busy="true";
+        dialog.setAttribute("aria-busy","true");
         for(const control of $$("button,input",dialog))control.disabled=true;
+        const errorStatus=$("[data-exit-error]",dialog);errorStatus.hidden=true;
         try {
             const remember=$("[data-exit-remember]",dialog).checked;
             await nativeExitDecision(decision,remember);
             if(remember)desktopConfig.preferences.ph_combo_exit_decision=decision;
-            dialog.close();dialog.remove();
+            controller.close(decision);
             const setting=$("[data-exit-behavior]");if(setting)setting.value=desktopConfig.preferences.ph_combo_exit_decision || "ask";
-        } catch(error){$("[data-exit-error]",dialog).textContent=humanError(error);}
-        finally {delete dialog.dataset.busy;for(const control of $$("button,input",dialog))control.disabled=false;}
+        } catch(error){errorStatus.textContent=humanError(error);errorStatus.hidden=false;}
+        finally {
+            delete dialog.dataset.busy;dialog.removeAttribute("aria-busy");
+            for(const control of $$("button,input",dialog))control.disabled=false;
+            if(dialog.open)$("[data-exit-decision=cancel]",dialog).focus();
+        }
     };
+    document.body.append(dialog);
+    controller=Sekura.createDialog(dialog,{
+        onBeforeClose:()=>{decide("cancel");return false;},
+        onOpenChange:open=>{if(!open){controller.destroy();dialog.remove();}}
+    });
     dialog.onclick=event=>{const button=event.target.closest("[data-exit-decision]");if(button)decide(button.dataset.exitDecision);};
-    dialog.oncancel=event=>{event.preventDefault();decide("cancel");};
-    document.body.append(dialog);dialog.showModal();
+    controller.show();
 };
 
 async function bootstrap() {

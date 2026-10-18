@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -14,9 +15,6 @@ import (
 //go:embed assets/desktop.html
 var desktopShell string
 
-//go:embed assets/base.css
-var baseCSS string
-
 //go:embed assets/chart.umd.min.js
 var chartJS string
 
@@ -29,15 +27,39 @@ var messagesJS string
 //go:embed assets/app.js
 var appJS string
 
-//go:embed assets/desktop.css
-var desktopCSS string
+//go:embed assets/vendor/sekura.css
+var sekuraCSS string
+
+//go:embed assets/vendor/sekura.iife.min.js
+var sekuraJS string
+
+//go:embed assets/sekura.css
+var workspaceCSS string
 
 func desktopHTML(c Config) string {
 	initial, _ := json.Marshal(c)
+	uiHash := sha256.Sum256([]byte(desktopShell + sekuraCSS + workspaceCSS + chartJS + desktopJS + messagesJS + appJS))
+	build, _ := json.Marshal(struct {
+		Version    string `json:"version"`
+		UIRevision string `json:"uiRevision"`
+	}{version, fmt.Sprintf("%x", uiHash)[:12]})
+	theme := "dark"
+	if c.Preferences["ph_combo_theme"] == "light" {
+		theme = "light"
+	}
+	density := "dense"
+	switch c.Preferences["ph_combo_native_density"] {
+	case `"comfortable"`:
+		density = "comfortable"
+	case `"compact"`:
+		density = "compact"
+	}
 	return strings.NewReplacer(
-		"{{DESKTOP_STYLES}}", baseCSS+"\n"+desktopCSS,
+		"{{DESKTOP_THEME}}", theme,
+		"{{DESKTOP_DENSITY}}", density,
+		"{{DESKTOP_STYLES}}", sekuraCSS+"\n"+workspaceCSS,
 		"{{DESKTOP_CHART}}", chartJS,
-		"{{DESKTOP_APP}}", "window.desktopConfig="+string(initial)+";"+desktopJS+messagesJS+appJS,
+		"{{DESKTOP_APP}}", "window.desktopConfig="+string(initial)+";window.desktopBuild="+string(build)+";"+sekuraJS+"\n"+desktopJS+messagesJS+appJS,
 	).Replace(desktopShell)
 }
 
