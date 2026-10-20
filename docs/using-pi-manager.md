@@ -48,6 +48,7 @@ uses normal window minimization.
 
 Closing the window or choosing Quit opens a confirmation with **Cancel**,
 **Minimize** and **Exit**. **Remember my decision** saves the selected behavior in `config.json`.
+On macOS, **Command-Q** and **Pi-Manager → Quit Pi-Manager** use the same exit flow.
 Remembering Exit skips future confirmations; remembering Cancel keeps the app
 open on subsequent close/quit requests. Remembering Minimize minimizes instead
 of exiting on subsequent close/quit requests, while monitoring continues.

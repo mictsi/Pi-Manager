@@ -66,6 +66,13 @@ runtime and a display. On Linux, with Xvfb installed:
 GDK_BACKEND=x11 PI_MANAGER_DESKTOP_TEST=1 xvfb-run -a go test -run TestNative -v .
 ```
 
+On macOS, check that native Command-Q and the application-menu Quit item reach
+the exit confirmation and respect remembered choices:
+
+```sh
+PI_MANAGER_DESKTOP_TEST=1 go test -run '^TestNativeMacQuitShortcut$' -v .
+```
+
 - Root `.go` files: application logic, platform integration and tests.
 - `assets/`: embedded interface, Chart.js, icons and dependency license notices.
 - `tools/icon/`: Go icon generator; `go generate .` regenerates native resources.

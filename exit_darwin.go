@@ -56,6 +56,12 @@ func bindExitWindow(w webview.WebView, request func()) (*exitWindow, error) {
 			}
 		})
 	}
+	closeMenu, err := bindMacQuitMenu(app, request)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	cleanups = append(cleanups, closeMenu)
 	return &exitWindow{
 		restore: func() {
 			app.Send(objc.RegisterName("setActivationPolicy:"), int64(0))
