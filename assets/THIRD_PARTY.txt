@@ -69,7 +69,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-ebitengine/purego v0.10.1 — https://github.com/ebitengine/purego
+ebitengine/purego v0.11.2 — https://github.com/ebitengine/purego
 ================================================================
 
                                  Apache License
@@ -275,7 +275,7 @@ ebitengine/purego v0.10.1 — https://github.com/ebitengine/purego
    limitations under the License.
 
 
-golang.org/x/sys v0.44.0 — https://go.googlesource.com/sys
+golang.org/x/sys v0.49.0 — https://go.googlesource.com/sys
 ==========================================================
 
 Copyright 2009 The Go Authors.
