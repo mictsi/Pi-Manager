@@ -115,11 +115,15 @@ func TestNativeDesktop(t *testing.T) {
                 hostHealth=new Map((await smokeHealth()).map(host=>[host.id,host]));renderPills();
                 const versionHost=document.querySelector('[data-host-versions="1"]');
                 assert(versionHost.querySelector(".upgrade-indicator") && !document.querySelector('[data-host-versions="2"] .upgrade-indicator'),"Update icon does not identify the outdated host");
-                assert(versionHost.textContent.includes("v6.1") && versionHost.textContent.includes("2026.09.0"),"Installed versions are missing from the top status");
+                assert(!versionHost.textContent.includes("v6.1") && !versionHost.textContent.includes("2026.09.0") && !document.querySelector(".server-versions"),"Versions are still visible outside the hover tooltip");
+                assert(versionHost.title.includes("v6.1") && versionHost.title.includes("2026.09.0") && versionHost.title.includes("v6.2") && versionHost.title.includes(t("versionFTL")) && versionHost.title.includes(t("versionWeb")),"Version hover details are missing installed/latest component versions");
+                assert(!versionHost.textContent.includes(t("connected")) && !document.querySelector('[data-host-versions="2"]').textContent.includes(t("connected")),"Connected text remains in the status badges");
+                assert(versionHost.querySelector(".role-badge").nextElementSibling===versionHost.querySelector(".upgrade-indicator"),"Update indicator is not immediately after Main/Secondary");
                 versionHost.focus();versionHost.click();
                 assert(document.querySelector("#inspectTitle").textContent.includes("One") && document.querySelectorAll("#inspectDialog tbody tr").length===4,"Version inspector lost its host or component rows");
                 assert(document.querySelectorAll("#inspectDialog .version-update").length===2 && document.querySelector("#inspectDialog").textContent.includes("v6.2"),"Version inspector did not show installed/latest component updates");
                 hostHealth.get("1").sampledAt++;renderPills();
+                assert(document.querySelector('[data-host-versions="1"]')===versionHost,"Health refresh replaced the hovered status badge");
                 document.querySelector("[data-inspect-close]").click();
                 assert(document.activeElement.dataset.hostVersions==="1","Version inspector did not restore focus after a status refresh");
                 assert(document.documentElement.dataset.skTheme===document.documentElement.dataset.theme,"Sekura theme does not match saved theme");

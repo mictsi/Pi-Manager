@@ -35,8 +35,9 @@ for shared styles, themes and accessible interactions.
   Select destinations, resource types and individual changes before applying.
 - **Inspect and trace queries.** Pause live updates, open query details, and find
   matching rules and subscribed lists on one host or across the fleet.
-- **Know what needs updating.** Per-host Core, FTL, Web and Docker versions, with
-  update indicators and an installed/latest comparison.
+- **Know what needs updating.** Hover for per-host Core, FTL, Web and Docker
+  versions, checked hourly. Compact badges flag updates beside the server role;
+  click for the installed/latest comparison.
 - **Fewer repetitive clicks.** Select multiple records and target servers for
   management actions. Tables update in place without reloading the page.
 - **Background monitoring.** Minimize to the tray and keep monitoring server

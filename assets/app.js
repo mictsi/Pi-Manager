@@ -158,25 +158,43 @@ function showInspector(title,body,actions="") {
     return inspector;
 }
 function versionLabel(component){return t(({core:"versionCore",ftl:"versionFTL",web:"versionWeb",docker:"versionDocker"})[component] || "versionUnknown");}
+function versionStatusText(status) {
+    return t(({update:"versionUpdate",current:"versionCurrent",unknown:"versionUnknown",notDocker:"versionNotDocker"})[status] || "versionUnknown");
+}
+function serverStatusTooltip(server,health) {
+    const info=health?.versions,lines=[server.label+" · "+t(server.role || "secondary")];
+    if(!info || info.unavailable)lines.push(t("versionsUnavailable"));
+    else for(const item of info.components || [])lines.push(`${versionLabel(item.component)}: ${item.local || "—"} → ${item.latest || "—"} (${versionStatusText(item.status)})`);
+    if(info?.checkedAt)lines.push(t("versionChecked",{time:fmtDate(info.checkedAt)}));
+    const metrics=healthText(health);if(metrics)lines.push(metrics);
+    return lines.join("\n");
+}
 function showServerVersions(server) {
     const info=hostHealth.get(server.id)?.versions,components=info?.components || [];
-    const states={update:"versionUpdate",current:"versionCurrent",unknown:"versionUnknown",notDocker:"versionNotDocker"};
-    const body=`<p>${textHTML("versionHelp")}</p>${!info || info.unavailable ? `<p class="notice warning">${textHTML("versionsUnavailable")}</p>` : `<div class="sk-table table-wrap"><table class="datatable"><thead><tr>${["component","installedVersion","latestVersion","status"].map(key=>`<th>${textHTML(key)}</th>`).join("")}</tr></thead><tbody>${components.map(item=>`<tr><td>${escapeHtml(versionLabel(item.component))}</td><td>${escapeHtml(item.local || "—")}</td><td>${escapeHtml(item.latest || "—")}</td><td><span class="version-state version-${item.status=== "update" ? "update" : "neutral"}">${textHTML(states[item.status] || "versionUnknown")}</span></td></tr>`).join("")}</tbody></table></div>`}${components.some(item=>item.component==="docker" && item.local) ? `<p class="notice">${textHTML("dockerUpgradeHelp")}</p>` : ""}${info?.checkedAt ? `<p class="count-note">${textHTML("versionChecked",{time:fmtDate(info.checkedAt)})}</p>` : ""}`;
+    const body=`<p>${textHTML("versionHelp")}</p>${!info || info.unavailable ? `<p class="notice warning">${textHTML("versionsUnavailable")}</p>` : `<div class="sk-table table-wrap"><table class="datatable"><thead><tr>${["component","installedVersion","latestVersion","status"].map(key=>`<th>${textHTML(key)}</th>`).join("")}</tr></thead><tbody>${components.map(item=>`<tr><td>${escapeHtml(versionLabel(item.component))}</td><td>${escapeHtml(item.local || "—")}</td><td>${escapeHtml(item.latest || "—")}</td><td><span class="version-state version-${item.status=== "update" ? "update" : "neutral"}">${escapeHtml(versionStatusText(item.status))}</span></td></tr>`).join("")}</tbody></table></div>`}${components.some(item=>item.component==="docker" && item.local) ? `<p class="notice">${textHTML("dockerUpgradeHelp")}</p>` : ""}${info?.checkedAt ? `<p class="count-note">${textHTML("versionChecked",{time:fmtDate(info.checkedAt)})}</p>` : ""}`;
     showInspector(t("serverVersions",{server:server.label}),body);
 }
 function renderPills() {
     updateViewChrome(state.page?.container);
-    const pills = $("#serverPills"),focused=document.activeElement?.closest("[data-host-versions]")?.dataset.hostVersions;
-    setHTML(pills,state.servers.map(s => {
-        const h=hostHealth.get(s.id),online=h?.sampledAt ? h.reachable : s.connected;
-        const status=s.checking ? "connecting" : !online ? (h?.sampledAt ? "unreachable" : "disconnected") : !s.connected ? "disconnected" : h?.blocking === "disabled" ? "disabled" : "connected";
-        const info=h?.versions,components=info?.components || [],updates=components.filter(item=>item.status==="update");
-        const summary=components.filter(item=>item.local).map(item=>`<span>${escapeHtml(versionLabel(item.component))} <b>${escapeHtml(item.local)}</b></span>`).join("");
-        const updateText=updates.length ? t("hostUpdates",{server:s.label,components:updates.map(item=>versionLabel(item.component)).join(", ")}) : t("serverVersions",{server:s.label});
-        return `<button type="button" data-host-versions="${s.id}" class="pill ${online ? "on" : "off"}" aria-label="${escapeHtml(updateText)}" title="${escapeHtml(updateText+" · "+healthText(h))}"><span class="dot"></span><b>${escapeHtml(s.label)}</b><span class="role-badge">${textHTML(s.role || "secondary")}</span><span>${textHTML(status)}</span>${updates.length ? `<span class="upgrade-indicator" role="img" aria-label="${textHTML("versionUpdate")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg></span>` : ""}<span class="server-versions">${summary || "—"}${info?.unavailable && summary ? ` · ${textHTML("versionsUnavailable")}` : ""}</span></button>`;
-    }).join(""));
+    const pills=$("#serverPills"),existing=new Map($$("[data-host-versions]",pills).map(button=>[button.dataset.hostVersions,button]));
+    for(const [index,server] of state.servers.entries()) {
+        const health=hostHealth.get(server.id),online=health?.sampledAt ? health.reachable : server.connected;
+        const status=server.checking ? "connecting" : !online ? (health?.sampledAt ? "unreachable" : "disconnected") : !server.connected ? "disconnected" : health?.blocking === "disabled" ? "disabled" : "connected";
+        const updates=(health?.versions?.components || []).filter(item=>item.status==="update");
+        const updateText=updates.length ? t("hostUpdates",{server:server.label,components:updates.map(item=>versionLabel(item.component)).join(", ")}) : t("serverVersions",{server:server.label});
+        let button=existing.get(server.id);
+        if(!button){button=document.createElement("button");button.type="button";button.dataset.hostVersions=server.id;}
+        existing.delete(server.id);
+        button.className="pill "+(online ? "on" : "off");
+        button.setAttribute("aria-label",updateText+" · "+t(status));
+        const tooltip=serverStatusTooltip(server,health);if(button.title!==tooltip)button.title=tooltip;
+        const content=`<span class="dot"></span><b>${escapeHtml(server.label)}</b><span class="role-badge">${textHTML(server.role || "secondary")}</span>${updates.length ? `<span class="upgrade-indicator" role="img" aria-label="${textHTML("versionUpdate")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg></span>` : ""}${status!=="connected" ? `<span>${textHTML(status)}</span>` : ""}`;
+        // Retain the hovered/focused badge and its contents during health polls.
+        if(button._statusHTML!==content){button.innerHTML=content;button._statusHTML=content;}
+        if(pills.children[index]!==button)pills.insertBefore(button,pills.children[index] || null);
+    }
+    for(const button of existing.values())button.remove();
     pills.onclick=event=>{const button=event.target.closest("[data-host-versions]");if(button){const server=serverById(button.dataset.hostVersions);if(server)showServerVersions(server);}};
-    if(focused)$( `[data-host-versions="${focused}"]`,pills)?.focus({preventScroll:true});
 }
 
 function renderShell() {

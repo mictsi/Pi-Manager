@@ -41,15 +41,18 @@ English and dense mode; window decorations and tray availability vary by OS.
 
 ## Server versions and update status
 
-Each server's status at the top shows its installed **Core**, **FTL**, **Web
-interface** and **Docker tag** when reported by Pi-hole. An animated arrow marks
-hosts with a newer reported release; it respects reduced-motion preferences.
-Click a server's status to inspect installed and latest versions per component.
+The top status badges show a reachability dot, server name and **Main/Secondary**
+role. Hover over a badge to see installed and latest **Core**, **FTL**, **Web
+interface** and **Docker tag** versions. Version details stay out of the normal
+header. An animated update arrow appears immediately after the role when a
+component has a newer reported release; it respects reduced-motion preferences.
+Click a badge for the full version comparison. Connected status uses the dot;
+connection errors and disabled blocking remain explicit.
 
 ![Server version details showing available updates and Docker upgrade guidance](images/server-versions.png)
 
 Version checks use the server's [`/info/version` API](https://github.com/pi-hole/FTL/blob/master/src/api/docs/content/specs/info.yaml)
-and are cached for up to 15 minutes. Pi-hole's own latest-release metadata may
+and refresh hourly, including retries after an unavailable response. Pi-hole's own latest-release metadata may
 be missing or delayed. Custom builds, development branches and missing versions
 remain unknown; an unavailable version endpoint does not make a reachable
 server appear offline. Non-Docker installations show **Not running in Docker**.

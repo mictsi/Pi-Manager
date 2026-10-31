@@ -49,6 +49,10 @@ func TestVersionMonitoringAndCache(t *testing.T) {
 			t.Fatal(h.Versions)
 		}
 	}
+	cached := m.versionCache["1\x00http://one.test/api"]
+	if remaining := time.Until(cached.expires); remaining < 59*time.Minute || remaining > time.Hour {
+		t.Fatal("successful version checks must refresh hourly", remaining)
+	}
 	m.sampleHost("1")
 	if requests.Load() != 1 {
 		t.Fatal("version endpoint polled with every health sample")
@@ -80,7 +84,11 @@ func TestVersionFailuresDoNotChangeReachability(t *testing.T) {
 			}
 			return jsonResponse(200, body), nil
 		})
-		h := (&HealthMonitor{app: a}).sampleHost("1")
+		monitor := &HealthMonitor{app: a}
+		h := monitor.sampleHost("1")
+		if remaining := time.Until(monitor.versionCache["1\x00http://one.test/api"].expires); remaining < 59*time.Minute || remaining > time.Hour {
+			t.Fatal("failed version checks must also wait for the hourly refresh", remaining)
+		}
 		if !h.Reachable || h.Versions == nil || !h.Versions.Unavailable {
 			t.Fatal("optional version endpoint affected host status", h)
 		}

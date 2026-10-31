@@ -467,10 +467,8 @@ html,body { width:100%; min-width:0; margin:0; overflow-x:hidden; }
 .pi-workspace .search-list-form .toolbar { align-items:flex-end; }
 .pi-workspace .search-domain-field { flex:1 1 260px; }
 .pi-workspace .search-domain-field input { width:100%; }
-.pi-workspace button.pill { font-family:inherit; text-align:left; flex-wrap:wrap; max-width:100%; }
+.pi-workspace button.pill { font-family:inherit; text-align:left; max-width:100%; }
 .pi-workspace button.pill:hover { border-color:var(--sk-color-border-interactive); }
-.pi-workspace .server-versions { display:flex; flex-basis:100%; flex-wrap:wrap; gap:4px 10px; overflow-wrap:anywhere; font-size:11px; }
-.pi-workspace .server-versions > span { white-space:normal; }
 .pi-workspace .upgrade-indicator { display:inline-flex; color:var(--sk-color-status-warning-text); animation:pi-upgrade 1.6s ease-in-out infinite; }
 .pi-workspace .upgrade-indicator svg { width:16px; height:16px; }
 .pi-workspace .version-update { color:var(--sk-color-status-warning-text); font-weight:600; }

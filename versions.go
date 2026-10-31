@@ -87,10 +87,9 @@ func (m *HealthMonitor) versions(id, serverURL string) *HostVersions {
 	}
 	info := &HostVersions{CheckedAt: now.Unix(), Components: []HostVersion{}}
 	var response versionEndpoint
-	ttl := 15 * time.Minute
+	ttl := time.Hour
 	if m.app.jsonAPI(id, "/info/version", "GET", nil, &response) != nil || response.Version == nil {
 		info.Unavailable = true
-		ttl = time.Minute
 	} else {
 		for _, item := range []struct {
 			name string
