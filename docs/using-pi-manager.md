@@ -26,7 +26,8 @@ English and dense mode; window decorations and tray availability vary by OS.
 
 - [Dashboard](dashboard.md): combined metrics, host filters, blocking buttons,
   and the Details and Top domains and clients tabs.
-- [Queries](queries.md): refresh controls, filters, query outcomes and domain rules.
+- [Queries](queries.md): pause, inspect query details, filter and manage domain rules.
+- [Search lists](search-lists.md): find a domain in rules and subscribed lists.
 - [Managing records](records.md): wildcard domains, local DNS, bulk actions and Gravity.
 - [Drift and sync](sync.md): preview differences and apply selected changes.
 - [Getting started](getting-started.md#connect-your-servers): server setup in Settings.
@@ -37,6 +38,24 @@ English and dense mode; window decorations and tray availability vary by OS.
 ![Pi-Manager dashboard in the light theme with the same combined metrics and host controls](images/dashboard-light.png)
 
 </details>
+
+## Server versions and update status
+
+Each server's status at the top shows its installed **Core**, **FTL**, **Web
+interface** and **Docker tag** when reported by Pi-hole. An animated arrow marks
+hosts with a newer reported release; it respects reduced-motion preferences.
+Click a server's status to inspect installed and latest versions per component.
+
+![Server version details showing available updates and Docker upgrade guidance](images/server-versions.png)
+
+Version checks use the server's [`/info/version` API](https://github.com/pi-hole/FTL/blob/master/src/api/docs/content/specs/info.yaml)
+and are cached for up to 15 minutes. Pi-hole's own latest-release metadata may
+be missing or delayed. Custom builds, development branches and missing versions
+remain unknown; an unavailable version endpoint does not make a reachable
+server appear offline. Non-Docker installations show **Not running in Docker**.
+
+For Docker, deploy a newer Pi-hole image to upgrade. This view reports versions;
+it does not initiate upgrades or modify a server.
 
 ## Tray and health monitoring
 

@@ -1,6 +1,6 @@
 "use strict";
 
-const TAB_IDS = ["dashboard", "queries", "domains", "hosts", "clients", "lists", "gravity", "drift", "settings"];
+const TAB_IDS = ["dashboard", "queries", "searchLists", "domains", "hosts", "clients", "lists", "gravity", "drift", "settings"];
 let currentLanguage = localStorage.getItem("ph_combo_language") || (navigator.language || "en").split("-")[0];
 if (!UI_LANGUAGES.includes(currentLanguage)) currentLanguage = "en";
 const state = {servers: desktopConfig.servers.map(s => ({...s, connected:false, checking:!!s.password})), activeTab:"dashboard", page:null, ready:false};
@@ -144,14 +144,39 @@ function healthText(h) {
     const value = (v,suffix="") => v == null ? "—" : Number(v).toLocaleString(localeCode(),{maximumFractionDigits:1})+suffix;
     return `${t(h.reachable ? "reachable" : "unreachable")} · ${t("load")}: ${value(h.load)} · ${t("cpu")}: ${value(h.cpu," %")} · ${t("memory")}: ${value(h.memory," %")} · ${t("temperature")}: ${value(h.temperature," °"+(h.unit || "C"))} · ${new Date(h.sampledAt*1000).toLocaleTimeString(localeCode())}`;
 }
+let inspector=null;
+function showInspector(title,body,actions="") {
+    inspector?.close();
+    const openerHost=document.activeElement?.closest("[data-host-versions]")?.dataset.hostVersions;
+    const dialog=document.createElement("dialog");dialog.id="inspectDialog";dialog.className="sk-dialog";
+    dialog.setAttribute("aria-labelledby","inspectTitle");
+    dialog.innerHTML=`<div class="sk-dialog__panel"><div class="sk-dialog__header"><h2 class="sk-dialog__title" id="inspectTitle">${escapeHtml(title)}</h2></div><div class="sk-dialog__body">${body}</div><div class="sk-dialog__footer">${actions}<button class="sk-button btn" data-inspect-close autofocus>${textHTML("closeDetails")}</button></div></div>`;
+    document.body.append(dialog);
+    const controller=Sekura.createDialog(dialog,{onOpenChange:open=>{if(!open){controller.destroy();dialog.remove();if(inspector?.dialog===dialog)inspector=null;if(openerHost)$(`[data-host-versions="${openerHost}"]`)?.focus({preventScroll:true});}}});
+    inspector={dialog,close:()=>controller.close()};
+    $("[data-inspect-close]",dialog).onclick=()=>controller.close();controller.show();
+    return inspector;
+}
+function versionLabel(component){return t(({core:"versionCore",ftl:"versionFTL",web:"versionWeb",docker:"versionDocker"})[component] || "versionUnknown");}
+function showServerVersions(server) {
+    const info=hostHealth.get(server.id)?.versions,components=info?.components || [];
+    const states={update:"versionUpdate",current:"versionCurrent",unknown:"versionUnknown",notDocker:"versionNotDocker"};
+    const body=`<p>${textHTML("versionHelp")}</p>${!info || info.unavailable ? `<p class="notice warning">${textHTML("versionsUnavailable")}</p>` : `<div class="sk-table table-wrap"><table class="datatable"><thead><tr>${["component","installedVersion","latestVersion","status"].map(key=>`<th>${textHTML(key)}</th>`).join("")}</tr></thead><tbody>${components.map(item=>`<tr><td>${escapeHtml(versionLabel(item.component))}</td><td>${escapeHtml(item.local || "—")}</td><td>${escapeHtml(item.latest || "—")}</td><td><span class="version-state version-${item.status=== "update" ? "update" : "neutral"}">${textHTML(states[item.status] || "versionUnknown")}</span></td></tr>`).join("")}</tbody></table></div>`}${components.some(item=>item.component==="docker" && item.local) ? `<p class="notice">${textHTML("dockerUpgradeHelp")}</p>` : ""}${info?.checkedAt ? `<p class="count-note">${textHTML("versionChecked",{time:fmtDate(info.checkedAt)})}</p>` : ""}`;
+    showInspector(t("serverVersions",{server:server.label}),body);
+}
 function renderPills() {
     updateViewChrome(state.page?.container);
-    const pills = $("#serverPills");
+    const pills = $("#serverPills"),focused=document.activeElement?.closest("[data-host-versions]")?.dataset.hostVersions;
     setHTML(pills,state.servers.map(s => {
         const h=hostHealth.get(s.id),online=h?.sampledAt ? h.reachable : s.connected;
         const status=s.checking ? "connecting" : !online ? (h?.sampledAt ? "unreachable" : "disconnected") : !s.connected ? "disconnected" : h?.blocking === "disabled" ? "disabled" : "connected";
-        return `<span class="pill ${online ? "on" : "off"}" title="${escapeHtml(healthText(h))}"><span class="dot"></span><b>${escapeHtml(s.label)}</b><span class="role-badge">${textHTML(s.role || "secondary")}</span><span>${textHTML(status)}</span></span>`;
+        const info=h?.versions,components=info?.components || [],updates=components.filter(item=>item.status==="update");
+        const summary=components.filter(item=>item.local).map(item=>`<span>${escapeHtml(versionLabel(item.component))} <b>${escapeHtml(item.local)}</b></span>`).join("");
+        const updateText=updates.length ? t("hostUpdates",{server:s.label,components:updates.map(item=>versionLabel(item.component)).join(", ")}) : t("serverVersions",{server:s.label});
+        return `<button type="button" data-host-versions="${s.id}" class="pill ${online ? "on" : "off"}" aria-label="${escapeHtml(updateText)}" title="${escapeHtml(updateText+" · "+healthText(h))}"><span class="dot"></span><b>${escapeHtml(s.label)}</b><span class="role-badge">${textHTML(s.role || "secondary")}</span><span>${textHTML(status)}</span>${updates.length ? `<span class="upgrade-indicator" role="img" aria-label="${textHTML("versionUpdate")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg></span>` : ""}<span class="server-versions">${summary || "—"}${info?.unavailable && summary ? ` · ${textHTML("versionsUnavailable")}` : ""}</span></button>`;
     }).join(""));
+    pills.onclick=event=>{const button=event.target.closest("[data-host-versions]");if(button){const server=serverById(button.dataset.hostVersions);if(server)showServerVersions(server);}};
+    if(focused)$( `[data-host-versions="${focused}"]`,pills)?.focus({preventScroll:true});
 }
 
 function renderShell() {
@@ -188,7 +213,7 @@ function renderShell() {
         applyWorkspaceTheme();
         state.page?.redraw?.();
     };
-    const groups=[["monitor",["dashboard","queries"]],["configuration",["domains","hosts","clients","lists"]],["operations",["gravity","drift"]],["",["settings"]]];
+    const groups=[["monitor",["dashboard","queries","searchLists"]],["configuration",["domains","hosts","clients","lists"]],["operations",["gravity","drift"]],["",["settings"]]];
     // Retain the focused nav button across page changes and translations.
     const focused=document.activeElement?.closest("#tabs [data-tab]")?.dataset.tab;
     setHTML($("#tabs"),groups.map(([label,ids])=>`<div class="nav-group">${label ? `<span class="nav-group-label">${textHTML(label)}</span>` : ""}${ids.map(id=>`<button type="button" data-tab="${id}" class="${id === state.activeTab ? "active" : ""}" ${id === state.activeTab ? 'aria-current="page"' : ""}>${viewIcon(id)}<span>${textHTML(id)}</span></button>`).join("")}</div>`).join(""));
@@ -207,6 +232,7 @@ async function setLanguage(language, render = true) {
 }
 async function switchTab(tab) {
     if (!TAB_IDS.includes(tab)) tab = "dashboard";
+    inspector?.close();
     const old = state.page;
     if (old) { old.active = false; clearTimeout(old.timer); old.dispose?.(); }
     state.activeTab = tab;
@@ -221,6 +247,7 @@ async function switchTab(tab) {
     try {
         if (tab === "dashboard") await renderDashboard(container, page);
         else if (tab === "queries") await renderQueries(container, page);
+        else if (tab === "searchLists") await renderListSearch(container,page);
         else if (["domains", "hosts", "clients", "lists"].includes(tab)) await renderRecords(container, page, tab);
         else if (tab === "drift") await renderDrift(container, page);
         else if (tab === "settings") await renderSettings(container, page);
@@ -230,6 +257,7 @@ async function switchTab(tab) {
 }
 const VIEW_ICONS={
     dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    searchLists:'<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6M10 7v6"/>',
     queries:'<path d="M4 5h16M4 12h10M4 19h6"/><circle cx="18" cy="17" r="3"/><path d="m20 19 2 3"/>',
     domains:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18"/>',
     hosts:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/>',
@@ -285,14 +313,26 @@ function renderViewChrome(container,tab) {
 function refreshControls(key) {
     const options = [[500,"realtime"], [1000,"oneSecond"], [2000,"seconds"], [5000,"seconds"], [10000,"seconds"], [15000,"seconds"], [30000,"seconds"], [60000,"minute"], [0,"paused"]];
     const selected = preference(key+"_interval", 2000);
-    return `<div class="refresh-controls" role="group" aria-label="${textHTML("refreshRate")}"><label class="refresh-field"><span>${textHTML("refreshRate")}</span><select class="sk-select refresh-interval" aria-label="${textHTML("refreshRate")}">${options.map(([value,label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${textHTML(label,{n:value/1000})}</option>`).join("")}</select></label><button class="sk-button btn" data-refresh>${textHTML("refresh")}</button><span class="status-line" data-refresh-status aria-live="off"></span></div>`;
+    return `<div class="refresh-controls ${key === "queries" ? "has-pause" : ""}" role="group" aria-label="${textHTML("refreshRate")}"><label class="refresh-field"><span>${textHTML("refreshRate")}</span><select class="sk-select refresh-interval" aria-label="${textHTML("refreshRate")}">${options.map(([value,label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${textHTML(label,{n:value/1000})}</option>`).join("")}</select></label>${key === "queries" ? `<button class="sk-button btn" data-pause aria-pressed="false">${textHTML("pauseQueries")}</button>` : ""}<button class="sk-button btn" data-refresh>${textHTML("refresh")}</button><span class="status-line" data-refresh-status aria-live="off"></span></div>`;
 }
 async function startPolling(page, container, key, refresh) {
     let interval = preference(key+"_interval", 2000);
-    const status = $("[data-refresh-status]", container);
+    const status = $("[data-refresh-status]", container),pause=$("[data-pause]",container);
+    page.pollGeneration=0;
+    page.paused=interval===0 || (!!pause && preference(key+"_paused",false));
+    const updatePause=()=>{if(pause){pause.textContent=t(page.paused ? "resumeQueries" : "pauseQueries");pause.setAttribute("aria-pressed",String(page.paused));}page.onPauseChange?.();};
+    page.setPaused=value=>{
+        page.paused=value;page.pollGeneration++;clearTimeout(page.timer);
+        savePreference(key+"_paused",value);
+        if(!value && interval===0){interval=preference(key+"_resume_interval",2000)||2000;$(".refresh-interval",container).value=String(interval);savePreference(key+"_interval",interval);}
+        updatePause();schedule();
+        if(!value){const pending=page.busy ? page.pending : Promise.resolve();pending.then(()=>{if(page.active && !page.paused)page.refresh();});}
+    };
+    if(pause)pause.onclick=()=>page.setPaused(!page.paused);
+    updatePause();
     function schedule() {
         clearTimeout(page.timer);
-        if (page.active && interval > 0) page.timer = setTimeout(() => document.hidden ? schedule() : page.refresh(), interval);
+        if (page.active && !page.paused && interval > 0) page.timer = setTimeout(() => document.hidden ? schedule() : page.refresh(), interval);
     }
     page.refresh = () => {
         if (!page.active) return Promise.resolve();
@@ -302,19 +342,22 @@ async function startPolling(page, container, key, refresh) {
         page.pending = (async () => {
             try {
                 const errors = await refresh();
-                if (page.active) status.textContent = errors?.length ? errors.join(" · ") : t("lastUpdated", {time:new Date().toLocaleTimeString(localeCode())});
+                if (page.active && errors!==null) status.textContent = errors?.length ? errors.join(" · ") : t("lastUpdated", {time:new Date().toLocaleTimeString(localeCode())});
             } catch (error) { if (page.active) status.textContent = humanError(error); }
             finally { page.busy = false; schedule(); }
         })();
         return page.pending;
     };
     $(".refresh-interval", container).onchange = event => {
-        interval = Number(event.target.value); savePreference(key+"_interval", interval); schedule();
+        const previous=interval;interval = Number(event.target.value); savePreference(key+"_interval", interval);
+        if(!pause)page.paused=interval===0;
+        if(pause && interval===0){if(previous>0)savePreference(key+"_resume_interval",previous);page.setPaused(true);}
+        else {if(pause)savePreference(key+"_resume_interval",interval);if(pause && previous===0)page.setPaused(false);else schedule();}
     };
     $("[data-refresh]", container).onclick = () => page.refresh();
     await page.refresh();
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden && state.page?.refresh) state.page.refresh(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !state.page?.paused && state.page?.refresh) state.page.refresh(); });
 function settingsLoginHTML(server) {
     return `<form class="login-form" data-loginform="${server.id}"><input class="sk-input" type="password" autocomplete="current-password" aria-label="${textHTML("password")}" placeholder="${textHTML("password")}" data-loginpw="${server.id}"><button class="sk-button btn primary xs">${textHTML("login")}</button></form>${server.error ? `<p class="sub">${escapeHtml(server.error)}</p>` : ""}`;
 }
@@ -586,7 +629,7 @@ function statusLabel(status) {
 async function renderQueries(container, page) {
     const model = {...{range:6,filter:"",server:"all",client:"all",type:"all",status:"all",pageSize:50,page:0,sort:"time",direction:-1},...preference("queries",{})};
     const rows = new Map(), cursors = new Map(), clientNames = new Map(), latest = new Map(), changingDomains = new Set();
-    let resetRequested = true, limited = false;
+    let resetRequested = true, limited = false, displayedAt=Date.now()/1000;
     const option = (value,label,selected) => `<option value="${escapeHtml(value)}" ${String(value) === String(selected) ? "selected" : ""}>${escapeHtml(label)}</option>`;
     container.innerHTML = `<div class="page-controls queries-controls"><label class="host-controls control-field"><span>${textHTML("server")}</span><select class="sk-select" data-server-filter>${option("all",t("all"),model.server)}${state.servers.map(s=>option(s.id,s.label,model.server)).join("")}</select></label>${refreshControls("queries")}</div><div class="toolbar query-filters">
         <label>${textHTML("range")}<select class="sk-select" data-range>${[[1,"hour"],[6,"hours"],[24,"hours"],[72,"days"],[168,"days"]].map(([n,key])=>option(n,t(key,{n:n>24?n/24:n}),model.range)).join("")}</select></label>
@@ -595,7 +638,7 @@ async function renderQueries(container, page) {
         <label>${textHTML("type")}<select class="sk-select" data-type-filter></select></label>
         <label>${textHTML("status")}<select class="sk-select" data-status-filter></select></label>
         <label>${textHTML("perPage")}<select class="sk-select" data-page-size>${[25,50,100,250,1000].map(n=>option(n,n,model.pageSize)).join("")}</select></label>
-        </div><div class="sk-card card"><p class="sub">${textHTML("queryActionsHelp")}</p><div class="sk-table table-wrap queries-table"><table class="datatable"><thead><tr>${["time","server","client","domain","type","queryResult","status"].map(key=>`<th data-sort="${key}" aria-sort="none">${textHTML(key)}</th>`).join("")}<th>${textHTML("actions")}</th></tr></thead><tbody></tbody></table></div>
+        </div><p class="count-note" data-pause-help></p><div class="sk-card card"><p class="sub">${textHTML("queryActionsHelp")}</p><div class="sk-table table-wrap queries-table"><table class="datatable"><thead><tr>${["time","server","client","domain","type","queryResult","status"].map(key=>`<th data-sort="${key}" aria-sort="none">${textHTML(key)}</th>`).join("")}<th>${textHTML("actions")}</th></tr></thead><tbody></tbody></table></div>
         ${pagerHTML()}<button class="sk-button btn xs" data-load-more>${textHTML("loadMore")}</button><p class="sub" data-query-note></p></div>`;
     const tbody = $("tbody",container);
     function remember() { savePreference("queries",model); }
@@ -611,7 +654,7 @@ async function renderQueries(container, page) {
         updateOptions("[data-type-filter]",allRows.map(q=>q.type).filter(Boolean),model.type);
         updateOptions("[data-status-filter]",allRows.map(q=>q.status).filter(Boolean),model.status,statusLabel);
         const filter = model.filter.toLocaleLowerCase(localeCode());
-        const cutoff = Date.now()/1000 - model.range*3600;
+        const cutoff = displayedAt - model.range*3600;
         const filtered = allRows.filter(q => q.time >= cutoff && (model.server === "all" || q.server.id === model.server) && (model.client === "all" || q.client?.ip === model.client) && (model.type === "all" || q.type === model.type) && (model.status === "all" || q.status === model.status) && (!filter || `${q.domain} ${q.client?.ip} ${q.client?.name} ${clientNames.get(q.client?.ip)||""}`.toLocaleLowerCase(localeCode()).includes(filter)));
         const value = q => model.sort === "queryResult" ? queryOutcome(q.status) : model.sort === "server" ? q.server.label : model.sort === "client" ? clientNames.get(q.client?.ip)||q.client?.name||q.client?.ip||"" : q[model.sort];
         filtered.sort((a,b) => model.direction * (model.sort === "time" ? a.time-b.time : String(value(a)||"").localeCompare(String(value(b)||""),localeCode(),{numeric:true})));
@@ -620,9 +663,10 @@ async function renderQueries(container, page) {
         reconcileRows(tbody,visible.map(q=>{
             const outcome=queryOutcome(q.status),domain=queryDomainName(q),busy=changingDomains.has(q.server.id+":"+domain.toLowerCase());
             const actions=["allow","deny"].map(action=>`<button class="sk-button btn xs query-${action}" data-query-action="${action}" title="${textHTML("queryDomainAction",{action:t(action),domain:domain || q.domain,server:q.server.label})}" aria-label="${textHTML("queryDomainAction",{action:t(action),domain:domain || q.domain,server:q.server.label})}" ${!domain || !q.server.connected || busy ? "disabled" : ""}>${queryStatusIcon(action === "allow" ? "allowed" : "blocked")}${textHTML(action)}</button>`).join("");
-            return {key:q._key,html:`<td>${escapeHtml(new Date(q.time*1000).toLocaleString(localeCode()))}</td><td><span class="server-chip s${q.server.id}">${escapeHtml(q.server.label)}</span></td><td title="${escapeHtml(q.client?.ip)}">${escapeHtml(clientNames.get(q.client?.ip)||q.client?.name||q.client?.ip||"–")}</td><td class="mono query-domain">${escapeHtml(q.domain)}</td><td>${escapeHtml(q.type)}</td><td><span class="query-result">${queryStatusIcon(outcome)}${escapeHtml(queryOutcomeLabel(outcome))}</span></td><td title="${escapeHtml(q.status)}">${escapeHtml(statusLabel(q.status))}</td><td><div class="query-domain-actions">${actions}</div></td>`};
+            return {key:q._key,html:`<td>${escapeHtml(new Date(q.time*1000).toLocaleString(localeCode()))}</td><td><span class="server-chip s${q.server.id}">${escapeHtml(q.server.label)}</span></td><td title="${escapeHtml(q.client?.ip)}">${escapeHtml(clientNames.get(q.client?.ip)||q.client?.name||q.client?.ip||"–")}</td><td class="mono query-domain">${page.paused ? `<button class="query-detail-link" data-query-details>${escapeHtml(q.domain)}</button>` : escapeHtml(q.domain)}</td><td>${escapeHtml(q.type)}</td><td><span class="query-result">${queryStatusIcon(outcome)}${escapeHtml(queryOutcomeLabel(outcome))}</span></td><td title="${escapeHtml(q.status)}">${escapeHtml(statusLabel(q.status))}</td><td><div class="query-domain-actions">${actions}</div></td>`};
         }));
-        for(const row of $$("tr[data-key]",tbody))row.dataset.queryOutcome=queryOutcome(rows.get(row.dataset.key).status);
+        for(const row of $$("tr[data-key]",tbody)){row.dataset.queryOutcome=queryOutcome(rows.get(row.dataset.key).status);row.classList.toggle("query-inspectable",!!page.paused);}
+        $("[data-pause-help]",container).textContent=t(page.paused ? "queryPausedHelp" : "queryPauseHelp");
         $("[data-load-more]",container).disabled = ![...cursors.values()].some(c=>c?.cursor != null && c.cursor !== 0 && c.cursor !== "");
         for (const th of $$("[data-sort]",container)) th.setAttribute("aria-sort",th.dataset.sort === model.sort ? model.direction === 1 ? "ascending" : "descending" : "none");
         $("[data-query-note]",container).textContent = limited ? t("queryLimit") : state.servers.some(s=>s.connected) ? filtered.length ? "" : t("noMatches") : t("loginRequired");
@@ -641,7 +685,12 @@ async function renderQueries(container, page) {
         }
     }
     tbody.onclick=async event=>{
-        const button=event.target.closest("[data-query-action]");if(!button || button.disabled)return;
+        const button=event.target.closest("[data-query-action]");
+        if(!button){
+            if(!page.paused || event.target.closest("button:not([data-query-details]),a,input,select"))return;
+            const row=event.target.closest("tr[data-key]"),query=row && rows.get(row.dataset.key);if(query)showQueryDetails(query);return;
+        }
+        if(button.disabled)return;
         const query=rows.get(button.closest("tr[data-key]").dataset.key);if(!query)return;
         const domain=queryDomainName(query),type=button.dataset.queryAction,key=query.server.id+":"+domain.toLowerCase();
         if(!domain || !query.server.connected || changingDomains.has(key))return;
@@ -669,54 +718,111 @@ async function renderQueries(container, page) {
         model.page=0;remember();draw();
     };
     $("[data-load-more]",container).onclick = async event => {
-        const button = event.target; button.disabled=true;
+        const button = event.target,generation=page.pollGeneration; button.disabled=true;
         try {
             await Promise.all(state.servers.filter(s=>s.connected).map(async server=>{
                 const cursor = cursors.get(server.id); if (!cursor?.cursor) return;
                 const result = await api(server,`/queries?length=1000&from=${cursor.from}&until=${cursor.until}&cursor=${encodeURIComponent(cursor.cursor)}`);
-                if (page.active) {merge(server,result);cursors.set(server.id,{...cursor,cursor:result.cursor});}
+                if (page.active && generation===page.pollGeneration) {merge(server,result);cursors.set(server.id,{...cursor,cursor:result.cursor});}
             }));
             draw();
         } catch (error) {showError(error);button.disabled=false;}
     };
+    page.onPauseChange=draw;
     draw();
     await startPolling(page,container,"queries",async()=>{
-        const reset = resetRequested; resetRequested=false;
-        const range = model.range, until=Math.floor(Date.now()/1000), from=until-range*3600;
-        if (reset) {rows.clear();cursors.clear();latest.clear();limited=false;}
-        const errors = [];
+        const reset=resetRequested,range=model.range,generation=page.pollGeneration;
+        const until=Math.floor(Date.now()/1000),from=until-range*3600;
+        const errors=[],staged=[];
         await Promise.all(state.servers.filter(s=>s.connected).map(async server=>{
-            const previousLatest = latest.get(server.id);
+            const previousLatest=latest.get(server.id);
             try {
-                const since = reset || !latest.has(server.id) ? from : Math.max(from,Math.floor(latest.get(server.id))-1);
-                const result = await api(server,`/queries?length=1000&from=${since}&until=${until}`);
-                if (!page.active || model.range !== range) return;
-                merge(server,result);
-                if (reset || !cursors.has(server.id)) cursors.set(server.id,{from,until,cursor:result?.cursor});
-                // Drain the complete new time slice before advancing to the
-                // next poll, even if it contains more than one API page.
-                if (!reset && previousLatest !== undefined) {
-                    let cursor=result?.cursor;
-                    const seen=new Set();
-                    while (cursor && !seen.has(String(cursor))) {
+                const since=reset || previousLatest===undefined ? from : Math.max(from,Math.floor(previousLatest)-1);
+                const result=await api(server,`/queries?length=1000&from=${since}&until=${until}`);
+                if(!page.active || page.pollGeneration!==generation || model.range!==range)return;
+                const queries=[...(result?.queries || [])],metadata=[];
+                let truncated=false;
+                const limit=()=>{if(queries.length>50000){queries.sort((a,b)=>b.time-a.time);queries.splice(50000);truncated=true;}};
+                limit();
+                if(!reset && previousLatest!==undefined){
+                    let cursor=result?.cursor;const seen=new Set();
+                    while(cursor && !seen.has(String(cursor))){
+                        if(!page.active || page.pollGeneration!==generation || model.range!==range)return;
                         seen.add(String(cursor));
                         const next=await api(server,`/queries?length=1000&from=${since}&until=${until}&cursor=${encodeURIComponent(cursor)}`);
-                        if (!page.active || model.range !== range) return;
-                        merge(server,next);
-                        cursor=next?.queries?.length ? next.cursor : null;
+                        queries.push(...(next?.queries || []));limit();cursor=next?.queries?.length ? next.cursor : null;
                     }
                 }
-                if (reset) {
-                    try { const clients=await api(server,"/clients");for (const client of clients?.clients||[]) if (client.comment) clientNames.set(client.client,client.comment); } catch { /* Query display works without client metadata. */ }
-                }
-            } catch (error) {
-                // Retry an incomplete slice rather than skipping its older rows.
-                if (previousLatest !== undefined) latest.set(server.id,previousLatest);
-                errors.push(server.label+": "+humanError(error));
-            }
+                if(reset){try{const clients=await api(server,"/clients");for(const client of clients?.clients || [])if(client.comment)metadata.push([client.client,client.comment]);}catch{ /* Client metadata is optional. */ }}
+                staged.push({server,queries,cursor:result?.cursor,metadata,truncated});
+            }catch(error){errors.push(server.label+": "+humanError(error));}
         }));
+        // Commit a complete snapshot. Pausing invalidates any request in flight.
+        if(!page.active || page.pollGeneration!==generation || model.range!==range)return null;
+        if(reset){rows.clear();cursors.clear();latest.clear();limited=false;resetRequested=false;}
+        displayedAt=until;
+        for(const item of staged){
+            merge(item.server,{queries:item.queries});limited ||= item.truncated;
+            if(reset || !cursors.has(item.server.id))cursors.set(item.server.id,{from,until,cursor:item.cursor});
+            for(const [ip,name] of item.metadata)clientNames.set(ip,name);
+        }
         draw();return errors;
     });
+}
+
+function showQueryDetails(query) {
+    const client=[query.client?.name,query.client?.ip].filter(Boolean).join(" · ") || "—";
+    const reply=query.reply?.type || t("notAvailable");
+    const time=Number(query.reply?.time),duration=Number.isFinite(time) && time>0 ? ` (${time*1000 < 0.001 ? "<0.001" : (time*1000).toLocaleString(localeCode(),{maximumFractionDigits:3})} ms)` : "";
+    const received=Number.isFinite(Number(query.time)) ? new Date(Number(query.time)*1000).toLocaleString(localeCode(),{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",fractionalSecondDigits:3,timeZoneName:"short"}) : "—";
+    const fields=[["server",query.server.label],["domain",query.domain],["queryReceived",received],["client",client],["queryStatusDetails",statusLabel(query.status)],["queryReply",reply+duration],["queryDatabaseID",query.id ?? t("notAvailable")]];
+    if(query.cname)fields.push(["queryCname",query.cname]);
+    const view=showInspector(t("queryDetails"),`<dl class="inspect-fields">${fields.map(([key,value])=>`<div data-query-field="${key}"><dt>${textHTML(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`,`<button class="sk-button btn primary" data-query-search ${queryDomainName(query) ? "" : "disabled"}>${textHTML("searchLists")}</button>${query.cname ? `<button class="sk-button btn" data-query-search-cname>${textHTML("searchCname")}</button>` : ""}`);
+    $("[data-query-search]",view.dialog).onclick=()=>openListSearch(query.domain,query.server.id).catch(showError);
+    const cname=$("[data-query-search-cname]",view.dialog);if(cname)cname.onclick=()=>openListSearch(query.cname,query.server.id).catch(showError);
+}
+async function openListSearch(domain,server) {
+    savePreference("list_search",{domain,server,partial:false});
+    await switchTab("searchLists");
+    $("[data-search-domain]",state.page.container)?.focus({preventScroll:true});
+}
+async function renderListSearch(container,page) {
+    const model={domain:"",server:"all",partial:false,...preference("list_search",{})};
+    if(!state.servers.some(server=>server.id===model.server))model.server="all";
+    container.innerHTML=`<form class="sk-card card search-list-form"><div class="toolbar"><label class="search-domain-field">${textHTML("domain")}<input class="sk-input" type="text" data-search-domain required maxlength="253" spellcheck="false" autocomplete="off" value="${escapeHtml(model.domain)}"></label><label>${textHTML("server")}<select class="sk-select" data-search-host><option value="all">${textHTML("allHosts")}</option>${state.servers.map(server=>`<option value="${server.id}" ${server.id===model.server ? "selected" : ""}>${escapeHtml(server.label)}</option>`).join("")}</select></label><label><input type="checkbox" data-search-partial ${model.partial ? "checked" : ""}>${textHTML("partialMatch")}</label><button class="sk-button btn primary" type="submit" data-search-submit>${textHTML("searchLists")}</button></div><p class="sub">${textHTML("searchListsHelp")}</p><p class="status-line" role="status" data-search-status></p></form><div class="sk-card card"><div class="sk-table table-wrap"><table class="datatable"><thead><tr>${["server","domain","matchSource","listOrRule","type","status","queryDatabaseID","comment"].map(key=>`<th>${textHTML(key)}</th>`).join("")}</tr></thead><tbody></tbody></table></div></div>`;
+    const form=$("form",container),status=$("[data-search-status]",container),button=$("[data-search-submit]",container),tbody=$("tbody",container);
+    let working=false;
+    async function search() {
+        if(working)return;
+        const domain=$("[data-search-domain]",container).value.trim().replace(/\.$/,"").toLowerCase();
+        if(!domain || domain.split(".").some(part=>!part) || !/^[\p{L}\p{N}\p{M}_.-]+$/u.test(domain)){status.textContent=t("invalidSearchDomain");return;}
+        Object.assign(model,{domain,server:$("[data-search-host]",container).value,partial:$("[data-search-partial]",container).checked});
+        savePreference("list_search",model);$("[data-search-domain]",container).value=domain;
+        let responders=0;
+        const servers=state.servers.filter(server=>model.server==="all" || model.server===server.id),results=[],notes=[];
+        working=true;for(const field of $$("input,select,button",form))field.disabled=true;
+        status.textContent=t("loading");
+        await Promise.all(servers.map(async server=>{
+            if(!server.connected){notes.push(server.label+": "+t("setupPiHelp"));return;}
+            try {
+                const data=await api(server,`/search/${encodeURIComponent(domain)}?partial=${model.partial}&N=1000`),search=data?.search;
+                if(!search || !Array.isArray(search.domains) || !Array.isArray(search.gravity))throw new Error(t("invalidSearchResponse"));
+                responders++;
+                for(const item of search.domains)results.push({server,item,source:item.kind==="regex" ? "regexRule" : "exactRule",value:item.domain,type:item.type==="allow" ? "allow" : "deny"});
+                for(const item of search.gravity)results.push({server,item,source:"subscribedList",value:item.address,type:item.type==="allow" ? "allow" : "deny"});
+                if(Number(search.results?.total)>search.domains.length+search.gravity.length)notes.push(t("searchTruncated",{server:server.label}));
+            }catch(error){notes.push(server.label+": "+humanError(error));}
+        }));
+        if(!page.active)return;
+        results.sort((a,b)=>a.server.label.localeCompare(b.server.label,localeCode()) || String(a.value).localeCompare(String(b.value),localeCode()));
+        setHTML(tbody,results.map(({server,item,source,value,type})=>`<tr><td><span class="server-chip s${server.id}">${escapeHtml(server.label)}</span></td><td class="mono">${escapeHtml(item.domain || domain)}</td><td>${textHTML(source)}</td><td class="mono">${escapeHtml(value || "—")}</td><td>${textHTML(type)}</td><td>${textHTML(item.enabled===true ? "enabled" : item.enabled===false ? "disabled" : "notAvailable")}</td><td>${escapeHtml(item.id ?? "—")}</td><td>${escapeHtml(item.comment || "—")}</td></tr>`).join(""));
+        container._visibleCount=results.length;updateViewChrome(container);
+        status.textContent=[results.length ? t("searchMatches",{n:results.length}) : t(responders ? "noSearchMatches" : "searchNoResponse"),...notes].join(" · ");
+        working=false;for(const field of $$("input,select,button",form))field.disabled=false;
+    }
+    form.onsubmit=event=>{event.preventDefault();search().catch(error=>{if(page.active){working=false;for(const field of $$("input,select,button",form))field.disabled=false;status.textContent=humanError(error);}});};
+    page.refresh=search;
+    if(model.domain)await search();
 }
 
 const RECORD_PATHS = {domains:"/domains",hosts:"/config/dns/hosts",clients:"/clients",lists:"/lists"};
@@ -1377,6 +1483,7 @@ async function renderGravity(container, page) {
 }
 
 window.showExitDialog=()=>{
+    inspector?.close();
     if(narrowWorkspace.matches)navigation?.close();
     $("#actionDialog [data-confirm-cancel]")?.click();
     let dialog=$("#exitDialog");

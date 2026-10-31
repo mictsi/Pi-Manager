@@ -6,6 +6,7 @@ import (
 )
 
 type HostHealth struct {
+	Versions      *HostVersions `json:"versions,omitempty"`
 	url           string
 	ID            string   `json:"id"`
 	Authenticated bool     `json:"authenticated"`
@@ -19,11 +20,13 @@ type HostHealth struct {
 	Unit          string   `json:"unit"`
 }
 type HealthMonitor struct {
-	app        *App
-	mu         sync.RWMutex
-	hosts      []HostHealth
-	retryMu    sync.Mutex
-	retryAfter map[string]time.Time
+	versionMu    sync.Mutex
+	versionCache map[string]versionSample
+	app          *App
+	mu           sync.RWMutex
+	hosts        []HostHealth
+	retryMu      sync.Mutex
+	retryAfter   map[string]time.Time
 }
 
 func (m *HealthMonitor) Get() []HostHealth {
@@ -94,6 +97,7 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 	m.app.mu.Unlock()
 	h.Reachable = true
 	h.Blocking = blocking.Blocking
+	h.Versions = m.versions(id, server.URL)
 	var system struct {
 		System struct {
 			CPU struct {

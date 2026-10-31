@@ -3,7 +3,7 @@
 [Documentation](../README.md#documentation) · [Using Pi-Manager](using-pi-manager.md)
 
 Inspect queries across your servers. Choose a server on the left of the top
-control row; the interval, **Refresh** button and last-update text appear on
+control row; the interval, **Pause / Resume**, **Refresh** and last-update text appear on
 the right, matching the [Dashboard](dashboard.md).
 
 ![Queries with server and refresh controls, filters, colored allowed and blocked rows, and per-domain actions](images/queries.png)
@@ -19,6 +19,26 @@ The **Allowed / blocked** column includes a status icon. Green rows indicate
 allowed queries; red rows indicate blocked queries. Pending and unknown queries
 have separate neutral states. The detailed **Status** column keeps the Pi-hole
 result, such as Forwarded, Cache or GRAVITY.
+
+## Pause and inspect a query
+
+Click **Pause**, between the refresh interval and **Refresh**, to freeze the
+current snapshot. A poll already in flight cannot change it. Click any row or
+its domain to open query details: **Query received on**, **Client**, **Query
+Status**, **Reply** and **Database ID**, along with the domain and host.
+
+Reply information includes the API's reply type and response time when
+available. Missing fields remain unavailable rather than being inferred.
+**Resume** refreshes immediately and continues at the selected interval.
+**Refresh** still requests a manual update while paused. The pause choice and
+interval survive navigation; window visibility changes do not resume a pause.
+
+![Paused query details with received time, client, status, reply and database ID](images/query-details.png)
+
+Choose **Search lists** in the details to search that domain on its originating
+server. If the record includes a CNAME target, **Search CNAME lists** searches
+that target instead. See [Search lists](search-lists.md) for list membership and
+multi-host searches.
 
 ## Allow or block a domain
 

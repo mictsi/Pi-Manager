@@ -69,6 +69,9 @@ func TestNativeDesktop(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := w.Bind("smokeHealth", func() []HostHealth { monitor := &HealthMonitor{app: a}; monitor.Sample(); return monitor.Get() }); err != nil {
+		t.Fatal(err)
+	}
 	w.SetSize(2400, 1000, 0)
 	result := make(chan string, 1)
 	if err = w.Bind("smokeReport", func(message string) {
@@ -94,7 +97,7 @@ func TestNativeDesktop(t *testing.T) {
                 await wait(() => typeof state !== "undefined" && state.ready && document.getElementById("desktopSettings"));
                 const rail=document.getElementById("workspaceNav").getBoundingClientRect(),workspace=document.getElementById("tabContent").getBoundingClientRect();
                 assert(workspace.width+rail.width >= innerWidth-2 && Math.abs(workspace.right-innerWidth)<2, "Workspace does not fill the available window");
-                for(const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift"]) {
+                for(const tab of ["dashboard","queries","searchLists","domains","hosts","clients","lists","gravity","drift"]) {
                     await switchTab(tab);
                     assert(!document.querySelector('[data-loginform],input[type="password"]'),"Login controls outside Settings on first launch: "+tab);
                     assert(document.querySelector("[data-setup-message]")?.textContent===t("setupPiHelp"),"Missing setup guidance for unconfigured servers: "+tab);
@@ -109,6 +112,16 @@ func TestNativeDesktop(t *testing.T) {
                 document.getElementById("desktopSettings").requestSubmit();
                 await wait(() => state.servers.every(s=>s.connected && !s.checking));
                 await setLanguage("en");
+                hostHealth=new Map((await smokeHealth()).map(host=>[host.id,host]));renderPills();
+                const versionHost=document.querySelector('[data-host-versions="1"]');
+                assert(versionHost.querySelector(".upgrade-indicator") && !document.querySelector('[data-host-versions="2"] .upgrade-indicator'),"Update icon does not identify the outdated host");
+                assert(versionHost.textContent.includes("v6.1") && versionHost.textContent.includes("2026.09.0"),"Installed versions are missing from the top status");
+                versionHost.focus();versionHost.click();
+                assert(document.querySelector("#inspectTitle").textContent.includes("One") && document.querySelectorAll("#inspectDialog tbody tr").length===4,"Version inspector lost its host or component rows");
+                assert(document.querySelectorAll("#inspectDialog .version-update").length===2 && document.querySelector("#inspectDialog").textContent.includes("v6.2"),"Version inspector did not show installed/latest component updates");
+                hostHealth.get("1").sampledAt++;renderPills();
+                document.querySelector("[data-inspect-close]").click();
+                assert(document.activeElement.dataset.hostVersions==="1","Version inspector did not restore focus after a status refresh");
                 assert(document.documentElement.dataset.skTheme===document.documentElement.dataset.theme,"Sekura theme does not match saved theme");
                 assert(document.querySelector('#tabs [aria-current="page"]').dataset.tab==="settings","Navigation does not identify the current page");
                 assert(document.documentElement.dataset.skDensity==="dense","Dense mode is not the default");
@@ -181,7 +194,7 @@ func TestNativeDesktop(t *testing.T) {
                 for (const language of ["en","el","sv","da","en"]) {
                     await setLanguage(language);
                     let dashboardRefreshOffset;
-                    for (const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift","settings"]) {
+                    for (const tab of ["dashboard","queries","searchLists","domains","hosts","clients","lists","gravity","drift","settings"]) {
                         await switchTab(tab);
                         assert(!document.querySelector("#tabContent .btn:not(.sk-button),#tabContent .card:not(.sk-card),#tabContent select:not(.sk-select),#tabContent .table-wrap:not(.sk-table)"),"View contains legacy components: "+tab);
                         const firstCell=document.querySelector("#tabContent .datatable tbody td");
@@ -197,7 +210,7 @@ func TestNativeDesktop(t *testing.T) {
                             assert(Math.abs(box.top-header.top)<2 && Math.abs(box.right-header.right)<2,"Blocking button is not at the top right of its card");
                         }
                         if(["dashboard","queries"].includes(tab)) {
-                            const controls=document.querySelector(".page-controls"),hosts=controls.querySelector(tab==="dashboard" ? ".dashboard-hosts" : "[data-server-filter]").getBoundingClientRect(),group=controls.querySelector(".refresh-controls"),refresh=group.querySelector("select").getBoundingClientRect(),button=group.querySelector("button").getBoundingClientRect(),status=group.querySelector("[data-refresh-status]").getBoundingClientRect();
+                            const controls=document.querySelector(".page-controls"),hosts=controls.querySelector(tab==="dashboard" ? ".dashboard-hosts" : "[data-server-filter]").getBoundingClientRect(),group=controls.querySelector(".refresh-controls"),refresh=group.querySelector("select").getBoundingClientRect(),button=group.querySelector("[data-refresh]").getBoundingClientRect(),status=group.querySelector("[data-refresh-status]").getBoundingClientRect();
                             const offset=refresh.top-controls.getBoundingClientRect().top;
                             if(tab==="dashboard")dashboardRefreshOffset=offset;
                             else assert(Math.abs(offset-dashboardRefreshOffset)<2,"Refresh controls occupy different rows across Dashboard and Queries: "+language);
@@ -387,6 +400,34 @@ func TestNativeDesktop(t *testing.T) {
                 assert(queryRow("2:1").dataset.queryOutcome==="unknown" && queryRow("2:1").querySelector(".query-result").textContent===t("queryUnknown"),"Unknown row is not neutral");
                 window.nativeRequest=originalQueryRequest;await state.page.refresh();
                 assert(document.querySelector("[data-filter]")===queryFilter && queryFilter.value==="example.com" && document.querySelector("table")===queryTable,"Query actions reset the filter or table");
+                const pause=document.querySelector("[data-pause]"),intervalRect=queryRate.getBoundingClientRect(),pauseRect=pause.getBoundingClientRect(),refreshRect=document.querySelector("[data-refresh]").getBoundingClientRect();
+                assert(pauseRect.left>=intervalRect.right && pauseRect.right<=refreshRect.left && Math.abs(pauseRect.bottom-refreshRect.bottom)<2,"Pause is not between interval and Refresh");
+                let releasePausedPoll,pausedCalls=0;
+                const pausedGate=new Promise(resolve=>releasePausedPoll=resolve);
+                window.nativeRequest=async(...args)=>{
+                    if(args[1].startsWith("/queries")){pausedCalls++;await pausedGate;const result=await originalQueryRequest(...args);const body=JSON.parse(result.body);body.queries.push({id:777,time:Date.now()/1000,domain:"new.example.com",type:"A",status:"CACHE",client:{ip:"192.168.1.50"}});result.body=JSON.stringify(body);return result;}
+                    return originalQueryRequest(...args);
+                };
+                const frozenText=queryTable.tBodies[0].textContent,inFlightPoll=state.page.refresh();
+                await wait(()=>pausedCalls>0);pause.click();releasePausedPoll();await inFlightPoll;
+                assert(state.page.paused && pause.textContent===t("resumeQueries") && queryTable.tBodies[0].textContent===frozenText,"Pausing accepted an in-flight poll or changed the frozen snapshot");
+                const frozenCalls=pausedCalls;document.dispatchEvent(new Event("visibilitychange"));await new Promise(r=>setTimeout(r,60));
+                assert(pausedCalls===frozenCalls,"Visibility change resumed paused queries");
+                window.nativeRequest=originalQueryRequest;
+                queryRow("1:1").querySelector("[data-query-details]").click();
+                const field=key=>document.querySelector('[data-query-field="'+key+'"] dd')?.textContent;
+                assert(field("queryDatabaseID")==="1" && field("queryReply").includes("IP") && field("queryReply").includes("19") && field("client").includes("192.168.1.50") && field("queryReceived") && field("queryStatusDetails"),"Query inspector lost API details");
+                document.querySelector("[data-query-search]").click();
+                await wait(()=>state.activeTab==="searchLists" && !document.querySelector("[data-search-submit]")?.disabled && document.querySelector("tbody tr"));
+                assert(document.querySelector("[data-search-domain]").value==="example.com" && document.querySelector("[data-search-host]").value==="1","Search lists did not preserve the clicked domain and origin host");
+                assert(document.querySelectorAll("tbody tr").length===2 && document.querySelector("tbody").textContent.includes("https://example.com/a") && document.querySelector("tbody").textContent.includes(t("exactRule")),"Search omitted matching domain rules or subscribed lists");
+                document.querySelector("[data-search-host]").value="all";document.querySelector("[data-search-partial]").checked=true;document.querySelector(".search-list-form").requestSubmit();
+                await wait(()=>!document.querySelector("[data-search-submit]").disabled);
+                assert(document.querySelectorAll("tbody tr").length===4,"Search did not combine results from both hosts");
+                await switchTab("queries");
+                assert(state.page.paused && document.querySelector("[data-pause]").textContent===t("resumeQueries"),"Paused state did not survive navigation");
+                document.querySelector("[data-pause]").click();await wait(()=>!state.page.busy && !state.page.paused);
+                assert(document.querySelector(".refresh-interval").value==="2000","Resume lost the selected interval");
                 await api(serverById("1"),"/domains/deny/exact/example.com",{method:"DELETE"});
                 await switchTab("domains");
                 const domainForm=document.getElementById("recordForm"),domainTable=document.querySelector("table"),domainFilter=document.querySelector("[data-record-filter]");
@@ -572,7 +613,7 @@ func TestNativeDesktop(t *testing.T) {
                 document.querySelector('[data-settings-logout="1"]').click();
                 await wait(()=>!state.servers[0].connected);
                 assert(!document.querySelector('[data-settings-logout="1"]') && document.querySelector('[data-loginform="1"]'),"Settings logout did not update locally");
-                for(const tab of ["dashboard","queries","domains","hosts","clients","lists","gravity","drift"]) {
+                for(const tab of ["dashboard","queries","searchLists","domains","hosts","clients","lists","gravity","drift"]) {
                     await switchTab(tab);
                     assert(!document.querySelector('[data-loginform],input[type="password"]'),"Login controls outside Settings after disconnect: "+tab);
                     assert(document.querySelector("[data-setup-message]")?.textContent===t("setupPiHelp") && document.querySelector("[data-setup-servers]").textContent.includes(serverById("1").label),"Disconnected server did not direct the user to Settings: "+tab);
@@ -681,7 +722,7 @@ func TestNativeDesktop(t *testing.T) {
                     assert(document.getElementById("workspaceNav").getAttribute("aria-modal")==="true" && document.getElementById("tabContent").closest("[inert]"),"Narrow navigation is not modal");
                     document.activeElement.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));
                     assert(document.getElementById("workspaceNav").hidden && !document.getElementById("tabContent").closest("[inert]") && document.activeElement.id==="navigationToggle","Navigation Escape did not close and restore focus");
-                    for(const tab of ["settings","dashboard","queries","domains","hosts","clients","lists","gravity","drift"]) {
+                    for(const tab of ["settings","dashboard","queries","searchLists","domains","hosts","clients","lists","gravity","drift"]) {
                         await switchTab(tab);
                         const main=document.getElementById("tabContent"),header=document.querySelector("header");
                         assert(main.scrollWidth<=innerWidth+1,"Page overflow at "+width+"/"+tab+": "+main.scrollWidth+" "+JSON.stringify([...main.querySelectorAll("*")].filter(element=>element.clientWidth>0 && element.scrollWidth>element.clientWidth+1).slice(0,12).map(element=>({tag:element.tagName,class:element.className,text:element.textContent.slice(0,60),right:element.getBoundingClientRect().right,scrollWidth:element.scrollWidth,width:element.clientWidth,overflow:getComputedStyle(element).overflowX}))));

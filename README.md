@@ -33,6 +33,10 @@ for shared styles, themes and accessible interactions.
   totals that differ or cannot be checked.
 - **Sync with control.** Preview drift in domains, local DNS, clients and lists.
   Select destinations, resource types and individual changes before applying.
+- **Inspect and trace queries.** Pause live updates, open query details, and find
+  matching rules and subscribed lists on one host or across the fleet.
+- **Know what needs updating.** Per-host Core, FTL, Web and Docker versions, with
+  update indicators and an installed/latest comparison.
 - **Fewer repetitive clicks.** Select multiple records and target servers for
   management actions. Tables update in place without reloading the page.
 - **Background monitoring.** Minimize to the tray and keep monitoring server
@@ -53,7 +57,8 @@ operating system and processor: Windows, Linux or macOS, on amd64 or ARM64.
 - [Getting started](docs/getting-started.md): installation and server setup.
 - [Using Pi-Manager](docs/using-pi-manager.md): navigation, appearance and tray.
 - [Dashboard](docs/dashboard.md): metrics, host filters and chart tabs.
-- [Queries](docs/queries.md): live queries, filters and domain actions.
+- [Queries](docs/queries.md): live queries, paused inspection and domain actions.
+- [Search lists](docs/search-lists.md): matching domain rules and subscribed lists.
 - [Managing records](docs/records.md): domains, local DNS, clients, lists and Gravity.
 - [Drift and sync](docs/sync.md): inspect differences and apply selected changes.
 - [Configuration and logs](docs/configuration.md): saved settings, logging and upgrades.

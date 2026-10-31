@@ -81,6 +81,28 @@ func desktopTestApp(t *testing.T) *App {
 		if path == "/api/groups" {
 			return jsonResponse(200, `{"groups":[{"id":0,"name":"Default"},{"id":3,"name":"Family"},{"id":4,"name":"IoT"}]}`), nil
 		}
+		if path == "/api/info/version" {
+			local := "v6.2"
+			dockerLocal := "2026.10.0"
+			if host == "one.test" {
+				local = "v6.1"
+				dockerLocal = "2026.09.0"
+			}
+			return response(200, map[string]any{"version": map[string]any{
+				"core":   map[string]any{"local": map[string]string{"version": local}, "remote": map[string]string{"version": "v6.2"}},
+				"ftl":    map[string]any{"local": map[string]string{"version": "v6.2"}, "remote": map[string]string{"version": "v6.2"}},
+				"web":    map[string]any{"local": map[string]string{"version": "v6.2"}, "remote": map[string]string{"version": "v6.2"}},
+				"docker": map[string]string{"local": dockerLocal, "remote": "2026.10.0"},
+			}}), nil
+		}
+		if strings.HasPrefix(path, "/api/search/") {
+			domain := strings.TrimPrefix(path, "/api/search/")
+			return response(200, map[string]any{"search": map[string]any{
+				"domains": []map[string]any{{"domain": domain, "type": "deny", "kind": "exact", "enabled": true, "id": 17, "comment": "Matched rule"}},
+				"gravity": []map[string]any{{"domain": domain, "address": "https://example.com/a", "type": "block", "enabled": true, "id": 7, "comment": "Example feed"}},
+				"results": map[string]int{"total": 2},
+			}}), nil
+		}
 		if path == "/api/info/system" {
 			return jsonResponse(200, `{"system":{"cpu":{"%cpu":12.5,"load":{"raw":[0.5,0.4,0.3]}},"memory":{"ram":{"%used":42.5}}}}`), nil
 		}
@@ -227,7 +249,7 @@ func desktopTestApp(t *testing.T) *App {
 					status = "DBBUSY"
 				}
 			}
-			return response(200, map[string]any{"queries": []map[string]any{{"id": id, "time": float64(timestamp), "domain": domain, "type": "A", "status": status, "client": map[string]string{"ip": "192.168.1.50", "name": "desktop"}}}, "cursor": cursor}), nil
+			return response(200, map[string]any{"queries": []map[string]any{{"id": id, "time": float64(timestamp), "domain": domain, "type": "A", "status": status, "reply": map[string]any{"type": "IP", "time": 0.019}, "client": map[string]string{"ip": "192.168.1.50", "name": "desktop"}}}, "cursor": cursor}), nil
 		case "/api/action/gravity":
 			return jsonResponse(200, "Gravity complete ✓\n"), nil
 		case "/api/stats/top_domains":
