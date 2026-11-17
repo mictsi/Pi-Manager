@@ -4,7 +4,8 @@
 
 Find the latest versions under **Releases**, as release artifacts. Choose the
 artifact for your operating system and processor, then extract it into a folder
-you can write to. Windows, Linux and macOS are supported on amd64 and ARM64.
+you can write to. Windows 10 or newer, Linux, and macOS 13 or newer are supported
+on amd64 and ARM64.
 Release artifacts include documentation, an example configuration, license
 notices and checksums.
 

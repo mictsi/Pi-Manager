@@ -2,7 +2,7 @@
 
 [Documentation](../README.md#documentation)
 
-Install **Go 1.27.3 or newer**. A C
+Install **Go 1.27.4 or newer**. A C
 compiler and Node.js are not required. Desktop runtimes are needed to run the
 app, even though release compilation uses `CGO_ENABLED=0`.
 
@@ -64,6 +64,13 @@ runtime and a display. On Linux, with Xvfb installed:
 
 ```sh
 GDK_BACKEND=x11 PI_MANAGER_DESKTOP_TEST=1 xvfb-run -a go test -run TestNative -v .
+```
+
+Frontend regression tests can also run with Node.js (18 or newer). Node.js
+is optional and is not needed to build or run Pi-Manager:
+
+```sh
+node tests/frontend.test.cjs
 ```
 
 On macOS, check that native Command-Q and the application-menu Quit item reach

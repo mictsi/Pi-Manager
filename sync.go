@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"sort"
@@ -64,6 +66,10 @@ type SyncResult struct {
 // jsonAPI also rejects per-item failures returned with an HTTP 200 response.
 // Mutating callers must already hold operationMu for the complete operation.
 func (a *App) jsonAPI(id, path, method string, body any, out any) error {
+	return a.jsonAPIContext(a.ctx, id, path, method, body, out)
+}
+
+func (a *App) jsonAPIContext(ctx context.Context, id, path, method string, body any, out any) error {
 	data := ""
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -72,7 +78,7 @@ func (a *App) jsonAPI(id, path, method string, body any, out any) error {
 		}
 		data = string(b)
 	}
-	r, err := a.request(id, path, method, strings.NewReader(data), "application/json", false)
+	r, err := a.requestContext(ctx, id, path, method, strings.NewReader(data), "application/json", false)
 	if err != nil {
 		return err
 	}
@@ -119,10 +125,68 @@ func recordIdentity(kind string, r syncRecord) string {
 		if len(fields) < 2 {
 			return r.Raw
 		}
-		// Alias edits belong to the same host record, so updating an alias list
-		// replaces the old entry rather than adding a conflicting second IP.
-		return fields[1]
+		address, err := netip.ParseAddr(fields[0])
+		if err != nil {
+			return r.Raw
+		}
+		return dnsRecordGroup(r) + "/" + address.String()
 	}
+}
+
+func dnsRecordGroup(r syncRecord) string {
+	fields := strings.Fields(strings.ToLower(r.Raw))
+	if len(fields) < 2 || r.DNSKind == "cnameRecords" {
+		return ""
+	}
+	family := "A/"
+	if strings.Contains(fields[0], ":") {
+		family = "AAAA/"
+	}
+	return family + fields[1]
+}
+
+// Match equal addresses first, then pair remaining records within one name and
+// address family. This preserves multiple A/AAAA answers and still detects IP edits.
+func alignDNSRecords(source, target map[string]syncRecord) map[string]syncRecord {
+	result := make(map[string]syncRecord, len(target))
+	remaining := make(map[string]syncRecord, len(target))
+	for key, record := range target {
+		if _, ok := source[key]; ok {
+			result[key] = record
+		} else {
+			remaining[key] = record
+		}
+	}
+	sourceKeys, targetKeys := []string{}, []string{}
+	for key := range source {
+		sourceKeys = append(sourceKeys, key)
+	}
+	for key := range remaining {
+		targetKeys = append(targetKeys, key)
+	}
+	sort.Strings(sourceKeys)
+	sort.Strings(targetKeys)
+	for _, key := range sourceKeys {
+		if _, ok := result[key]; ok {
+			continue
+		}
+		group := dnsRecordGroup(source[key])
+		if group == "" {
+			continue
+		}
+		for _, candidate := range targetKeys {
+			record, ok := remaining[candidate]
+			if ok && dnsRecordGroup(record) == group {
+				result[key] = record
+				delete(remaining, candidate)
+				break
+			}
+		}
+	}
+	for key, record := range remaining {
+		result[key] = record
+	}
+	return result
 }
 func (a *App) snapshot(id string, kinds []string) syncSnapshot {
 	s := syncSnapshot{Records: map[string]map[string]syncRecord{}, Groups: map[int]string{}, Errors: map[string]string{}}
@@ -171,17 +235,12 @@ func (a *App) snapshot(id string, kinds []string) syncSnapshot {
 							s.Errors[kind] = "invalid DNS entry"
 							break
 						}
-						raw = strings.Join(strings.Fields(raw), " ")
 					} else {
 						parts := strings.Split(raw, ",")
 						if len(parts) < 2 || len(parts) > 3 {
 							s.Errors[kind] = "invalid CNAME entry"
 							break
 						}
-						for i := range parts {
-							parts[i] = strings.TrimSpace(parts[i])
-						}
-						raw = strings.Join(parts, ",")
 					}
 					records = append(records, syncRecord{Raw: raw, DNSKind: dnsKind})
 				}
@@ -220,7 +279,16 @@ func (a *App) snapshot(id string, kinds []string) syncSnapshot {
 }
 func comparableRecord(kind string, r syncRecord, groups map[int]string) (any, error) {
 	if kind == "hosts" {
-		return r.Raw, nil
+		if r.DNSKind == "cnameRecords" {
+			parts := strings.Split(r.Raw, ",")
+			for i := range parts {
+				parts[i] = strings.TrimSpace(parts[i])
+			}
+			return strings.Join(parts, ","), nil
+		}
+		// Compare normalized values, but retain the original text for the
+		// config API's exact array-element DELETE and for rollback.
+		return strings.Join(strings.Fields(r.Raw), " "), nil
 	}
 	names := make([]string, 0, len(r.Groups))
 	for _, id := range r.Groups {
@@ -264,6 +332,19 @@ func mappedRecord(r syncRecord, from, to map[int]string) (syncRecord, error) {
 // CopyRecord uses fresh server records and maps group names exactly as drift
 // sync does. Numeric IDs from a different server are never sent directly.
 func (a *App) CopyRecord(sourceID, targetID, kind string, identity syncRecord) error {
+	return a.copyRecord(sourceID, targetID, kind, identity, nil)
+}
+
+func (a *App) CopyRecordAtServer(sourceID, targetID, kind string, identity syncRecord, sourceURL, targetURL string, revision uint64) error {
+	return a.copyRecord(sourceID, targetID, kind, identity, func() error {
+		if err := a.checkServer(sourceID, sourceURL, revision); err != nil {
+			return err
+		}
+		return a.checkServer(targetID, targetURL, revision)
+	})
+}
+
+func (a *App) copyRecord(sourceID, targetID, kind string, identity syncRecord, check func() error) error {
 	if sourceID == targetID || (kind != "domains" && kind != "clients" && kind != "lists") {
 		return errors.New("choose different servers and a supported record type")
 	}
@@ -271,6 +352,11 @@ func (a *App) CopyRecord(sourceID, targetID, kind string, identity syncRecord) e
 		return errOperationBusy
 	}
 	defer a.operationMu.Unlock()
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 	source := a.snapshot(sourceID, []string{kind})
 	if problem := source.Errors[kind]; problem != "" {
 		return errors.New(problem)
@@ -292,6 +378,35 @@ func (a *App) CopyRecord(sourceID, targetID, kind string, identity syncRecord) e
 		return err
 	}
 	return a.writeSyncRecord(targetID, kind, nil, &mapped)
+}
+
+func (a *App) ReplaceDNSAtServer(id, expectedURL string, revision uint64, before, after string) error {
+	if !a.operationMu.TryLock() {
+		return errOperationBusy
+	}
+	defer a.operationMu.Unlock()
+	if err := a.checkServer(id, expectedURL, revision); err != nil {
+		return err
+	}
+	for _, raw := range []string{before, after} {
+		parts := strings.Fields(raw)
+		if len(parts) < 2 {
+			return errors.New("invalid DNS entry")
+		}
+		if _, err := netip.ParseAddr(parts[0]); err != nil {
+			return errors.New("invalid DNS address")
+		}
+	}
+	snapshot := a.snapshot(id, []string{"hosts"})
+	if snapshot.Errors["hosts"] != "" {
+		return errors.New(snapshot.Errors["hosts"])
+	}
+	old, next := syncRecord{Raw: before}, syncRecord{Raw: after}
+	current, ok := snapshot.Records["hosts"][recordIdentity("hosts", old)]
+	if !ok || current.Raw != before {
+		return errors.New("DNS record changed; refresh and try again")
+	}
+	return a.writeSyncRecord(id, "hosts", &old, &next)
 }
 
 func dnsNames(r syncRecord) []string {
@@ -365,10 +480,14 @@ func (a *App) makeSyncPlan(targets, kinds []string, mirror bool) (*SyncPlan, err
 				continue
 			}
 			keys := map[string]bool{}
-			for key := range source.Records[kind] {
+			mainRecords, otherRecords := source.Records[kind], target.Records[kind]
+			if kind == "hosts" {
+				otherRecords = alignDNSRecords(mainRecords, otherRecords)
+			}
+			for key := range mainRecords {
 				keys[key] = true
 			}
-			for key := range target.Records[kind] {
+			for key := range otherRecords {
 				keys[key] = true
 			}
 			sorted := make([]string, 0, len(keys))
@@ -384,15 +503,15 @@ func (a *App) makeSyncPlan(targets, kinds []string, mirror bool) (*SyncPlan, err
 			}
 			dnsOwners := map[string][]string{}
 			if kind == "hosts" {
-				for key, record := range target.Records[kind] {
+				for key, record := range otherRecords {
 					for _, name := range dnsNames(record) {
 						dnsOwners[name] = append(dnsOwners[name], key)
 					}
 				}
 			}
 			for _, key := range sorted {
-				r, hasMain := source.Records[kind][key]
-				other, hasOther := target.Records[kind][key]
+				r, hasMain := mainRecords[key]
+				other, hasOther := otherRecords[key]
 				row := DriftRow{ServerID: id, Resource: kind, Key: key, Status: "same"}
 				var err error
 				if hasMain {
@@ -413,7 +532,10 @@ func (a *App) makeSyncPlan(targets, kinds []string, mirror bool) (*SyncPlan, err
 						// A/AAAA/CNAME definitions. Ambiguous aliases need manual resolution.
 						for _, name := range dnsNames(r) {
 							for _, otherKey := range dnsOwners[name] {
-								if otherKey != key {
+								// Multiple address records for the same primary hostname are valid.
+								owner := otherRecords[otherKey]
+								sameHost := r.DNSKind != "cnameRecords" && owner.DNSKind != "cnameRecords" && strings.EqualFold(strings.Fields(r.Raw)[1], strings.Fields(owner.Raw)[1])
+								if otherKey != key && !sameHost {
 									row.Problem = "DNS alias overlaps another secondary record"
 								}
 							}

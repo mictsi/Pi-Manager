@@ -64,7 +64,7 @@ func TestNativeDesktop(t *testing.T) {
 	if err := w.Bind("smokeConfig", a.config.Get); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Bind("smokeBackupDenied", func(string) (BackupResult, error) {
+	if err := w.Bind("smokeBackupDenied", func(string, string, uint64) (BackupResult, error) {
 		return BackupResult{}, responseError(APIResponse{Status: 403, Body: `{"error":{"message":"Unable to export configuration","hint":"The current app session is not allowed to export Pi-hole config settings (webserver.api.app_sudo is false)"}}`})
 	}); err != nil {
 		t.Fatal(err)
@@ -88,6 +88,7 @@ func TestNativeDesktop(t *testing.T) {
             const errors = [];
             window.addEventListener("error", e => errors.push(e.message));
             window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
+            const inspectNativeRequest=(id,path,method="GET",body="",stream=false)=>{const server=serverById(id);return nativeRequest(id,path,method,body,stream,server.url,server.revision);};
             const assert = (condition, message) => { if (!condition) throw new Error(message); };
             const wait = async test => {
                 for (let n=0; n<400; n++) { if (test()) return; await new Promise(r=>setTimeout(r,25)); }
@@ -122,6 +123,12 @@ func TestNativeDesktop(t *testing.T) {
                 versionHost.focus();versionHost.click();
                 assert(document.querySelector("#inspectTitle").textContent.includes("One") && document.querySelectorAll("#inspectDialog tbody tr").length===4,"Version inspector lost its host or component rows");
                 assert(document.querySelectorAll("#inspectDialog .version-update").length===2 && document.querySelector("#inspectDialog").textContent.includes("v6.2"),"Version inspector did not show installed/latest component updates");
+                const checkVersions=document.querySelector("[data-check-versions]");
+                assert(checkVersions && checkVersions.textContent===t("checkVersionsAgain"),"Per-host version recheck is missing");
+                checkVersions.click();
+                assert(checkVersions.disabled,"Version recheck allowed overlapping requests");
+                await wait(()=>!checkVersions.disabled);
+                assert(document.querySelector("[data-check-versions]")===checkVersions && document.querySelectorAll("#inspectDialog tbody tr").length===4,"Version recheck replaced the dialog or lost component information");
                 hostHealth.get("1").sampledAt++;renderPills();
                 assert(document.querySelector('[data-host-versions="1"]')===versionHost,"Health refresh replaced the hovered status badge");
                 document.querySelector("[data-inspect-close]").click();
@@ -151,7 +158,7 @@ func TestNativeDesktop(t *testing.T) {
                 assert(document.querySelector("#toastArea [data-sk-toast-dismiss]") && document.getElementById("toastArea").getAttribute("aria-live")==="polite","Notification is not accessible or dismissible");
                 dismissTest();
                 try {
-                    await nativeRequest("1", "invalid-path", "GET", "", false);
+                    await inspectNativeRequest("1", "invalid-path", "GET", "", false);
                     throw new Error("Invalid request was accepted");
                 } catch (error) { assert(error.message.includes("API path"), "Native errors are not Error objects"); }
                 assert(!document.getElementById("minimizeTray"),"Minimize-to-tray button was not removed");
@@ -370,7 +377,7 @@ func TestNativeDesktop(t *testing.T) {
                 assert(queryRow("1:1")===allowedQuery && queryRow("1:1").querySelector('[data-query-action="deny"]').disabled,"Polling lost query action interlock or replaced the row");
                 releaseQueryAction();await wait(()=>!queryRow("1:1").querySelector('[data-query-action="allow"]').disabled);
                 window.nativeRequest=originalQueryRequest;
-                const queryDomains=async id=>JSON.parse((await nativeRequest(id,"/domains","GET","",false)).body).domains;
+                const queryDomains=async id=>JSON.parse((await inspectNativeRequest(id,"/domains","GET","",false)).body).domains;
                 let queryRules=await queryDomains("1");
                 assert(queryRules.some(item=>item.domain==="example.com" && item.type==="allow" && item.kind==="exact" && item.enabled && item.groups[0]===0),"Query allow did not create an exact allow rule");
                 assert(!(await queryDomains("2")).some(item=>item.domain==="example.com"),"Query allow modified a different server");
@@ -449,14 +456,14 @@ func TestNativeDesktop(t *testing.T) {
                 await wait(()=>document.querySelectorAll("tbody tr[data-key]").length===4);
                 assert(document.getElementById("recordForm")===domainForm && document.querySelector("table")===domainTable && domainFilter.value==="example","Add replaced the page or reset its filter");
                 assert(document.querySelector("[data-selected]").textContent===t("selected",{n:2}),"Adding reset the selection");
-                const domainData=JSON.parse((await nativeRequest("1","/domains","GET","",false)).body);
+                const domainData=JSON.parse((await inspectNativeRequest("1","/domains","GET","",false)).body);
                 const preserved=domainData.domains.find(d=>d.domain==="ads.example");
                 assert(preserved.enabled===false && preserved.comment==="keep comment" && preserved.groups[0]===3,"Toggle lost domain metadata");
                 document.querySelector("[data-values]").value="reject.example";
                 domainForm.requestSubmit();
                 await wait(()=>document.getElementById("errorArea").textContent.includes(t("failedChanges",{n:1})));
-                const firstPartial=JSON.parse((await nativeRequest("1","/domains","GET","",false)).body);
-                const secondPartial=JSON.parse((await nativeRequest("2","/domains","GET","",false)).body);
+                const firstPartial=JSON.parse((await inspectNativeRequest("1","/domains","GET","",false)).body);
+                const secondPartial=JSON.parse((await inspectNativeRequest("2","/domains","GET","",false)).body);
                 assert(firstPartial.domains.some(d=>d.domain==="reject.example") && !secondPartial.domains.some(d=>d.domain==="reject.example"),"Partial failure was not reflected per server");
                 const wildcard=document.querySelector("[data-domain-wildcard]"),domainKind=document.querySelector("[data-record-kind]"),domainType=document.querySelector("[data-record-type]"),addDomain=document.querySelector('#recordForm button[type="submit"]');
                 assert(!wildcard.checked && !wildcard.disabled,"Wildcard option must start unchecked");
@@ -466,7 +473,7 @@ func TestNativeDesktop(t *testing.T) {
                 domainForm.requestSubmit();await wait(()=>!addDomain.disabled);
                 const wildcardPatterns=["(\\.|^)wildcard\\.example$","(\\.|^)another\\.example$"];
                 for(const id of ["1","2"]) {
-                    const records=JSON.parse((await nativeRequest(id,"/domains","GET","",false)).body).domains;
+                    const records=JSON.parse((await inspectNativeRequest(id,"/domains","GET","",false)).body).domains;
                     for(const pattern of wildcardPatterns)assert(records.some(d=>d.domain===pattern && d.kind==="regex" && d.type==="deny" && d.comment==="wildcard test" && d.groups[0]===0 && d.enabled),"Wildcard domain was not saved as a regex with metadata on every target");
                     assert(!records.some(d=>d.kind==="exact" && ["wildcard.example","*.another.example"].includes(d.domain)),"Wildcard addition also created an exact entry");
                 }
@@ -476,7 +483,7 @@ func TestNativeDesktop(t *testing.T) {
                 domainType.value="allow";document.querySelector("[data-values]").value="*.allowed.example";
                 domainForm.requestSubmit();await wait(()=>!addDomain.disabled);
                 for(const id of ["1","2"]) {
-                    const records=JSON.parse((await nativeRequest(id,"/domains","GET","",false)).body).domains;
+                    const records=JSON.parse((await inspectNativeRequest(id,"/domains","GET","",false)).body).domains;
                     assert(records.some(d=>d.domain==="(\\.|^)allowed\\.example$" && d.kind==="regex" && d.type==="allow"),"Wildcard allow entry used the wrong API kind or list");
                 }
                 wildcard.checked=false;document.querySelector("[data-values]").value="plain.example";
@@ -486,7 +493,7 @@ func TestNativeDesktop(t *testing.T) {
                 const manualPattern="^manual[0-9]+\\.example$";document.querySelector("[data-values]").value=manualPattern;
                 domainForm.requestSubmit();await wait(()=>!addDomain.disabled);
                 for(const id of ["1","2"]) {
-                    const records=JSON.parse((await nativeRequest(id,"/domains","GET","",false)).body).domains;
+                    const records=JSON.parse((await inspectNativeRequest(id,"/domains","GET","",false)).body).domains;
                     assert(records.some(d=>d.domain==="plain.example" && d.kind==="exact" && d.type==="allow"),"Unchecked wildcard changed normal exact additions");
                     assert(records.some(d=>d.domain===manualPattern && d.kind==="regex" && d.type==="allow"),"Manual regex was rewritten");
                 }
@@ -499,7 +506,7 @@ func TestNativeDesktop(t *testing.T) {
                 const listAll=document.querySelector("[data-select-all]");listAll.checked=true;listAll.dispatchEvent(new Event("change"));
                 document.querySelector('[data-bulk="disable"]').click();
                 await wait(()=>[...document.querySelectorAll("tbody .badge")].every(b=>b.textContent===t("disabled")));
-                const listData=JSON.parse((await nativeRequest("1","/lists","GET","",false)).body);
+                const listData=JSON.parse((await inspectNativeRequest("1","/lists","GET","",false)).body);
                 assert(listData.lists.every(l=>l.enabled===false) && listData.lists[0].groups[0]===3 && listData.lists[0].comment==="keep list","List toggle lost metadata");
                 document.querySelector("[data-values]").value="https://example.com/new1\nhttps://example.com/new2";
                 listForm.requestSubmit();
@@ -514,7 +521,7 @@ func TestNativeDesktop(t *testing.T) {
                 assert(document.getElementById("actionDialog").open && !dnsEditor.validity.valid,"DNS editor accepted an invalid address");
                 dnsEditor.value="192.168.1.99";dnsEditor.dispatchEvent(new Event("input"));document.querySelector("#actionDialog form").requestSubmit();
                 await wait(()=>document.getElementById("errorArea").textContent.includes(t("restored")));
-                const dns=JSON.parse((await nativeRequest("1","/config/dns/hosts","GET","",false)).body);
+                const dns=JSON.parse((await inspectNativeRequest("1","/config/dns/hosts","GET","",false)).body);
                 assert(dns.config.dns.hosts.includes("192.168.1.3 nas.home"),"DNS rollback did not restore the original value");
                 const quickCases=[
                     {kind:"domains",source:{domain:"quick.example",type:"deny",kind:"exact",comment:"from main",groups:[3],enabled:false},extra:{domain:"secondary-only.example",type:"deny",kind:"exact",groups:[0]}},
@@ -669,7 +676,7 @@ func TestNativeDesktop(t *testing.T) {
                 assert(backupState.config.path.endsWith(".json") && document.querySelector("[data-config-backup-status]").textContent.includes(backupState.config.path),"App settings backup did not show its saved JSON path");
                 const realBackup=window.nativeBackupServer,backupCalls=[];let releaseBackup;
                 const backupGate=new Promise(resolve=>releaseBackup=resolve);
-                window.nativeBackupServer=async id=>{backupCalls.push(id);await backupGate;if(id==="2")throw new Error("simulated backup failure");return realBackup(id)};
+                window.nativeBackupServer=async(id,...identity)=>{backupCalls.push(id);await backupGate;if(id==="2")throw new Error("simulated backup failure");return realBackup(id,...identity)};
                 document.querySelector('[data-server-backup="1"]').click();
                 document.querySelector("[data-backup-all]").click();
                 assert(backupCalls.join(",")==="1,2" && document.querySelector("[data-backup-all]").disabled,"Batch backup restarted a running backup or missed a host");
@@ -690,7 +697,7 @@ func TestNativeDesktop(t *testing.T) {
                 restoreFiles.items.add(new File([Uint8Array.from(atob(await smokeRestoreZIP()),c=>c.charCodeAt(0))],"server-backup.zip",{type:"application/zip"}));
                 restoreInput.files=restoreFiles.files;
                 document.querySelector("[data-restore-target]").value="2";
-                for(const input of document.querySelectorAll("[data-restore-section]"))input.checked=input.dataset.restoreSection==="domains";
+                for(const input of document.querySelectorAll("[data-restore-section]"))input.checked=input.dataset.restoreSection==="groups";
                 const realConfirm=window.confirmAction;let restoreConfirmation="";
                 window.confirmAction=message=>{restoreConfirmation=message;return false};
                 document.querySelector("[data-restore-server-form]").requestSubmit();

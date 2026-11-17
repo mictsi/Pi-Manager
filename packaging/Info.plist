@@ -10,4 +10,5 @@
     <key>CFBundleShortVersionString</key><string>@VERSION@</string>
     <key>CFBundleVersion</key><string>@VERSION@</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict></plist>

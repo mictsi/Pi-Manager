@@ -101,7 +101,7 @@ func TestSyncStalePreviewDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := a.snapshot("2", []string{"hosts"})
-	if s.Records["hosts"]["nas.home"].Raw != "192.168.1.4 nas.home" {
+	if s.Records["hosts"][recordIdentity("hosts", syncRecord{Raw: "192.168.1.4 nas.home"})].Raw != "192.168.1.4 nas.home" {
 		t.Fatal("stale plan modified DNS")
 	}
 	// Saving a role/URL change expires any preview before it can target a new host.
@@ -255,7 +255,7 @@ func TestSyncDNSRollbackAndPartialFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := a.snapshot("2", []string{"hosts"})
-	if s.Records["hosts"]["nas.home"].Raw != before.Raw {
+	if s.Records["hosts"][recordIdentity("hosts", syncRecord{Raw: "192.168.1.4 nas.home"})].Raw != before.Raw {
 		t.Fatal("DNS rollback lost original")
 	}
 	rejected := syncRecord{Domain: "reject.example", Type: "deny", Kind: "exact", Enabled: true, Groups: []int{0}}
@@ -298,7 +298,7 @@ func TestSyncDNSAliasChangesReplaceExistingRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := a.snapshot("2", []string{"hosts"})
-	if len(after.Records["hosts"]) != 1 || after.Records["hosts"]["nas.home"].Raw != changed.Raw {
+	if len(after.Records["hosts"]) != 1 || after.Records["hosts"][recordIdentity("hosts", changed)].Raw != changed.Raw {
 		t.Fatal(after)
 	}
 }
@@ -358,7 +358,7 @@ func TestSyncAppliesOnlySelectedRows(t *testing.T) {
 	if _, ok := after.Records["domains"]["deny/exact/untouched.example"]; ok {
 		t.Fatal("unselected domain was added")
 	}
-	if after.Records["hosts"]["nas.home"].Raw != "192.168.1.4 nas.home" {
+	if after.Records["hosts"][recordIdentity("hosts", syncRecord{Raw: "192.168.1.4 nas.home"})].Raw != "192.168.1.4 nas.home" {
 		t.Fatal("unselected DNS drift was synced")
 	}
 }

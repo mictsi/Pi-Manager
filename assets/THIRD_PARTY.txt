@@ -2,12 +2,12 @@ Third-party notices for Pi-Manager
 
 The desktop uses the operating system webview runtime, distributed separately.
 
-Chart.js 4.4.1 — https://github.com/chartjs/Chart.js
+Chart.js 4.6.1 — https://github.com/chartjs/Chart.js
 ====================================================
 
 The MIT License (MIT)
 
-Copyright (c) 2014-2022 Chart.js Contributors
+Copyright (c) 2014-2024 Chart.js Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
@@ -69,7 +69,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-ebitengine/purego v0.11.2 — https://github.com/ebitengine/purego
+ebitengine/purego v0.11.3 — https://github.com/ebitengine/purego
 ================================================================
 
                                  Apache License
@@ -275,7 +275,7 @@ ebitengine/purego v0.11.2 — https://github.com/ebitengine/purego
    limitations under the License.
 
 
-golang.org/x/sys v0.49.0 — https://go.googlesource.com/sys
+golang.org/x/sys v0.50.0 — https://go.googlesource.com/sys
 ==========================================================
 
 Copyright 2009 The Go Authors.
@@ -307,7 +307,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-Sekura Design System reference assets (3.2.0)
+Sekura Design System reference assets (3.2.2)
 ============================================
 
 Source: https://apps.tsiortos.com/sekuradesign

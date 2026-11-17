@@ -36,8 +36,12 @@ var sekuraJS string
 //go:embed assets/sekura.css
 var workspaceCSS string
 
-func desktopHTML(c Config) string {
+func desktopHTML(c Config, revision ...uint64) string {
 	initial, _ := json.Marshal(c)
+	var currentRevision uint64
+	if len(revision) > 0 {
+		currentRevision = revision[0]
+	}
 	uiHash := sha256.Sum256([]byte(desktopShell + sekuraCSS + workspaceCSS + chartJS + desktopJS + messagesJS + appJS))
 	build, _ := json.Marshal(struct {
 		Version    string `json:"version"`
@@ -59,7 +63,7 @@ func desktopHTML(c Config) string {
 		"{{DESKTOP_DENSITY}}", density,
 		"{{DESKTOP_STYLES}}", sekuraCSS+"\n"+workspaceCSS,
 		"{{DESKTOP_CHART}}", chartJS,
-		"{{DESKTOP_APP}}", "window.desktopConfig="+string(initial)+";window.desktopBuild="+string(build)+";"+sekuraJS+"\n"+desktopJS+messagesJS+appJS,
+		"{{DESKTOP_APP}}", "window.desktopConfig="+string(initial)+fmt.Sprintf(";window.desktopRevision=%d;", currentRevision)+"window.desktopBuild="+string(build)+";"+sekuraJS+"\n"+desktopJS+messagesJS+appJS,
 	).Replace(desktopShell)
 }
 
@@ -73,18 +77,21 @@ func newDesktop(a *App) (webview.WebView, error) {
 		name string
 		fn   any
 	}{
-		{"nativeRequest", a.Request},
-		{"nativeLogin", a.LoginAtURL},
+		{"nativeRequest", a.RequestAtServer},
+		{"nativeLogin", a.LoginAtServer},
 		{"nativeReadStream", a.ReadStream},
 		{"nativeCancelStream", a.CancelStream},
-		{"nativeSaveServers", a.SaveServers},
-		{"nativeBackupServer", a.BackupServer},
+		{"nativeSaveServers", a.SaveServerConfiguration},
+		{"nativeConfiguration", a.Configuration},
+		{"nativeReplaceDNS", a.ReplaceDNSAtServer},
+		{"nativeCheckVersions", monitor.CheckVersions},
+		{"nativeBackupServer", a.BackupServerAtServer},
 		{"nativeBackupConfig", a.BackupConfig},
-		{"nativeRestoreServer", a.RestoreServer},
+		{"nativeRestoreServer", a.RestoreServerAtServer},
 		{"nativeRestoreConfig", a.RestoreConfig},
 		{"nativePreviewSync", a.PreviewSync},
 		{"nativeApplySync", a.ApplySync},
-		{"nativeCopyRecord", a.CopyRecord},
+		{"nativeCopyRecord", a.CopyRecordAtServer},
 		{"nativeMonitor", monitor.Get},
 		{"nativePreference", a.config.SetPreference},
 		{"nativeUIError", func() { a.log.Warn("desktop JavaScript error; inspect the dashboard for details") }},
@@ -170,7 +177,8 @@ func runDesktop(a *App) error {
 		return err
 	}
 	defer w.Destroy()
-	w.SetHtml(desktopHTML(a.config.Get()))
+	snapshot := a.Configuration()
+	w.SetHtml(desktopHTML(snapshot.Config, snapshot.Revision))
 	a.log.Info("desktop opened")
 	w.Run()
 	// Stop native callbacks (including long-running Gravity reads) before the

@@ -47,17 +47,20 @@ func TestHealthMetricsAndMissingSensors(t *testing.T) {
 func TestBackgroundMonitorRunsWithoutWebView(t *testing.T) {
 	a := desktopTestApp(t)
 	m := &HealthMonitor{app: a}
-	updated := make(chan []HostHealth, 1)
+	updated := make(chan []HostHealth, 10)
 	go m.Run(func(hosts []HostHealth) { updated <- hosts })
-	select {
-	case hosts := <-updated:
-		if len(hosts) != 2 || !hosts[0].Reachable {
-			t.Fatal(hosts)
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case hosts := <-updated:
+			if len(hosts) == 2 && hosts[0].Reachable && hosts[1].Reachable {
+				a.Close()
+				return
+			}
+		case <-deadline:
+			t.Fatal("background monitoring did not run")
 		}
-	case <-time.After(6 * time.Second):
-		t.Fatal("background monitoring did not run")
 	}
-	a.Close()
 }
 func TestExplicitLogoutPreventsAutomaticReconnect(t *testing.T) {
 	var logins atomic.Int32

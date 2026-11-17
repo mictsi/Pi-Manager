@@ -49,6 +49,10 @@ component has a newer reported release; it respects reduced-motion preferences.
 Click a badge for the full version comparison. Connected status uses the dot;
 connection errors and disabled blocking remain explicit.
 
+After updating a Pi-hole, click its badge and choose **Check again**. This
+immediately refreshes that host's installed versions and update indicator without
+waiting for the next hourly check. Other hosts keep their existing check schedule.
+
 ![Server version details showing available updates and Docker upgrade guidance](images/server-versions.png)
 
 Version checks use the server's [`/info/version` API](https://github.com/pi-hole/FTL/blob/master/src/api/docs/content/specs/info.yaml)

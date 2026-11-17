@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,6 +31,7 @@ type App struct {
 	// Exclusive operations keep server identities and configuration stable.
 	// Ordinary writes/login hold a read lock; reads remain available to monitoring.
 	operationMu sync.RWMutex
+	revision    atomic.Uint64
 	syncPlan    *SyncPlan
 	authLocks   map[string]*sync.Mutex
 	loggedOut   map[string]bool
@@ -88,7 +90,31 @@ func (a *App) server(id string) (Server, error) {
 }
 
 func (a *App) Request(id, path, method, body string, stream bool) (APIResponse, error) {
+	return a.requestGuarded(id, path, method, body, stream, nil)
+}
+
+// Every desktop callback carries the identity it originally displayed. Reusing
+// a slot, or restoring its settings, invalidates queued callbacks even at the same URL.
+func (a *App) RequestAtServer(id, path, method, body string, stream bool, expectedURL string, revision uint64) (APIResponse, error) {
+	return a.requestGuarded(id, path, method, body, stream, func() error { return a.checkServer(id, expectedURL, revision) })
+}
+
+func (a *App) checkServer(id, expectedURL string, revision uint64) error {
+	s, err := a.server(id)
+	expected, normalizeErr := normalizeConfig(Config{Servers: []Server{{ID: id, URL: expectedURL}}})
+	if err != nil || normalizeErr != nil || expectedURL == "" || a.revision.Load() != revision || expected.Servers[0].URL != s.URL {
+		return errors.New("server configuration changed; refresh Settings and try again")
+	}
+	return nil
+}
+
+func (a *App) requestGuarded(id, path, method, body string, stream bool, check func() error) (APIResponse, error) {
 	if method == "GET" {
+		if check != nil {
+			if err := check(); err != nil {
+				return APIResponse{}, err
+			}
+		}
 		return a.request(id, path, method, strings.NewReader(body), "application/json", stream)
 	}
 	// Reject writes during a restore rather than queueing them against restored
@@ -102,6 +128,11 @@ func (a *App) Request(id, path, method, body string, stream bool) (APIResponse, 
 			release()
 		}
 	}()
+	if check != nil {
+		if err := check(); err != nil {
+			return APIResponse{}, err
+		}
+	}
 	r, err := a.request(id, path, method, strings.NewReader(body), "application/json", stream)
 	if r.Stream != "" {
 		// Gravity remains a mutation until its stream ends, including in the tray.
@@ -118,6 +149,10 @@ var errOperationBusy = errors.New("configuration operation in progress; try agai
 
 // request is used by operations that already hold operationMu for mutations.
 func (a *App) request(id, path, method string, body io.Reader, contentType string, stream bool) (APIResponse, error) {
+	return a.requestContext(a.ctx, id, path, method, body, contentType, stream)
+}
+
+func (a *App) requestContext(parent context.Context, id, path, method string, body io.Reader, contentType string, stream bool) (APIResponse, error) {
 	if path == "/auth" && method == "DELETE" {
 		lock := a.authLock(id)
 		lock.Lock()
@@ -148,7 +183,7 @@ func (a *App) request(id, path, method string, body io.Reader, contentType strin
 	if stream {
 		timeout = 15 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(a.ctx, timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	keepStream := false
 	defer func() {
 		if !keepStream {
@@ -306,15 +341,28 @@ func (a *App) LoginAtURL(id, password, expectedURL string) error {
 	return a.loginAtURL(id, password, expectedURL, false)
 }
 
+func (a *App) LoginAtServer(id, password, expectedURL string, revision uint64) error {
+	return a.loginContext(a.ctx, id, password, expectedURL, false, func() error { return a.checkServer(id, expectedURL, revision) })
+}
+
 func (a *App) login(id, password string, automatic bool) error {
 	return a.loginAtURL(id, password, "", automatic)
 }
 
 func (a *App) loginAtURL(id, password, expectedURL string, automatic bool) error {
+	return a.loginContext(a.ctx, id, password, expectedURL, automatic)
+}
+
+func (a *App) loginContext(ctx context.Context, id, password, expectedURL string, automatic bool, checks ...func() error) error {
 	if !a.operationMu.TryRLock() {
 		return errOperationBusy
 	}
 	defer a.operationMu.RUnlock()
+	for _, check := range checks {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 	lock := a.authLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -350,7 +398,7 @@ func (a *App) loginAtURL(id, password, expectedURL string, automatic bool) error
 	delete(a.sessions, id)
 	a.mu.Unlock()
 	b, _ := json.Marshal(map[string]string{"password": password})
-	r, err := a.request(id, "/auth", "POST", strings.NewReader(string(b)), "application/json", false)
+	r, err := a.requestContext(ctx, id, "/auth", "POST", strings.NewReader(string(b)), "application/json", false)
 	if err != nil {
 		return err
 	}
@@ -393,12 +441,28 @@ func responseError(r APIResponse) error {
 }
 
 func (a *App) SaveServers(servers []Server) error {
+	_, err := a.SaveServerConfiguration(servers)
+	return err
+}
+
+type ServerConfiguration struct {
+	Config   Config `json:"config"`
+	Revision uint64 `json:"revision"`
+}
+
+func (a *App) Configuration() ServerConfiguration {
+	a.operationMu.RLock()
+	defer a.operationMu.RUnlock()
+	return ServerConfiguration{Config: a.config.Get(), Revision: a.revision.Load()}
+}
+
+func (a *App) SaveServerConfiguration(servers []Server) (ServerConfiguration, error) {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	a.syncPlan = nil
 	previous := a.config.Get().Servers
 	if err := a.config.SetServers(servers); err != nil {
-		return err
+		return ServerConfiguration{}, err
 	}
 	a.mu.Lock()
 	for id, sess := range a.sessions {
@@ -418,5 +482,6 @@ func (a *App) SaveServers(servers []Server) error {
 	}
 	a.mu.Unlock()
 	a.log.Info("server configuration saved", "servers", len(servers))
-	return nil
+	a.revision.Add(1)
+	return ServerConfiguration{Config: a.config.Get(), Revision: a.revision.Load()}, nil
 }

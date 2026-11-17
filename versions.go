@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,8 +21,9 @@ type HostVersions struct {
 	Unavailable bool          `json:"unavailable"`
 }
 type versionSample struct {
-	value   *HostVersions
-	expires time.Time
+	value    *HostVersions
+	expires  time.Time
+	revision uint64
 }
 type versionEndpoint struct {
 	Version *struct {
@@ -77,18 +80,40 @@ func versionStatus(local, remote string) string {
 	return "current"
 }
 func (m *HealthMonitor) versions(id, serverURL string) *HostVersions {
+	return m.versionsContext(m.app.ctx, id, serverURL, false)
+}
+
+func (m *HealthMonitor) versionsContext(ctx context.Context, id, serverURL string, force bool) *HostVersions {
 	key := id + "\x00" + serverURL
+	m.versionMu.Lock()
+	if m.versionLocks == nil {
+		m.versionLocks = map[string]*sync.Mutex{}
+	}
+	if m.versionLocks[id] == nil {
+		m.versionLocks[id] = &sync.Mutex{}
+	}
+	lock := m.versionLocks[id]
+	m.versionMu.Unlock()
+	// Serialize checks for this host so an older hourly check cannot overwrite
+	// the user's newer manual check. Other hosts continue independently.
+	lock.Lock()
+	defer lock.Unlock()
 	now := time.Now()
+	revision := m.app.revision.Load()
 	m.versionMu.Lock()
 	cached, ok := m.versionCache[key]
 	m.versionMu.Unlock()
-	if ok && now.Before(cached.expires) {
+	if !force && ok && cached.revision == revision && now.Before(cached.expires) {
 		return cached.value
 	}
 	info := &HostVersions{CheckedAt: now.Unix(), Components: []HostVersion{}}
 	var response versionEndpoint
 	ttl := time.Hour
-	if m.app.jsonAPI(id, "/info/version", "GET", nil, &response) != nil || response.Version == nil {
+	current, serverErr := m.app.server(id)
+	if serverErr != nil || current.URL != serverURL {
+		return &HostVersions{CheckedAt: now.Unix(), Unavailable: true, Components: []HostVersion{}}
+	}
+	if m.app.jsonAPIContext(ctx, id, "/info/version", "GET", nil, &response) != nil || response.Version == nil {
 		info.Unavailable = true
 	} else {
 		for _, item := range []struct {
@@ -116,7 +141,7 @@ func (m *HealthMonitor) versions(id, serverURL string) *HostVersions {
 		info.Components = append(info.Components, docker)
 	}
 	current, err := m.app.server(id)
-	if err != nil || current.URL != serverURL {
+	if err != nil || current.URL != serverURL || m.app.revision.Load() != revision {
 		return &HostVersions{CheckedAt: now.Unix(), Unavailable: true, Components: []HostVersion{}}
 	}
 	m.versionMu.Lock()
@@ -129,7 +154,43 @@ func (m *HealthMonitor) versions(id, serverURL string) *HostVersions {
 			delete(m.versionCache, entry)
 		}
 	}
-	m.versionCache[key] = versionSample{value: info, expires: now.Add(ttl)}
+	m.versionCache[key] = versionSample{value: info, expires: now.Add(ttl), revision: revision}
 	m.versionMu.Unlock()
 	return info
+}
+
+// Bypass only this host's hourly cache after an upgrade, then update the same
+// monitor state used by the tooltip, animated indicator and detail dialog.
+func (m *HealthMonitor) CheckVersions(id, expectedURL string, revision uint64) (*HostVersions, error) {
+	if err := m.app.checkServer(id, expectedURL, revision); err != nil {
+		return nil, err
+	}
+	server, err := m.app.server(id)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(m.app.ctx, 8*time.Second)
+	defer cancel()
+	info := m.versionsContext(ctx, id, server.URL, true)
+	if info.Unavailable {
+		// An upgrade restarts FTL and can expire the saved session. Recover it
+		// just as background monitoring does, while respecting explicit logout.
+		m.app.mu.Lock()
+		recoverSession := m.app.sessions[id].sid == "" && !m.app.loggedOut[id]
+		m.app.mu.Unlock()
+		if recoverSession && server.Password != "" && m.app.loginContext(ctx, id, "", server.URL, true, func() error { return m.app.checkServer(id, expectedURL, revision) }) == nil {
+			info = m.versionsContext(ctx, id, server.URL, true)
+		}
+	}
+	if err := m.app.checkServer(id, expectedURL, revision); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	for i := range m.hosts {
+		if m.hosts[i].ID == id && m.hosts[i].url == server.URL {
+			m.hosts[i].Versions = info
+		}
+	}
+	m.mu.Unlock()
+	return info, nil
 }

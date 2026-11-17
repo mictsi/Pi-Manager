@@ -3,7 +3,7 @@
 const TAB_IDS = ["dashboard", "queries", "searchLists", "domains", "hosts", "clients", "lists", "gravity", "drift", "settings"];
 let currentLanguage = localStorage.getItem("ph_combo_language") || (navigator.language || "en").split("-")[0];
 if (!UI_LANGUAGES.includes(currentLanguage)) currentLanguage = "en";
-const state = {servers: desktopConfig.servers.map(s => ({...s, connected:false, checking:!!s.password})), activeTab:"dashboard", page:null, ready:false};
+const state = {servers: desktopConfig.servers.map(s => ({...s, revision:desktopRevision, connected:false, checking:!!s.password})), settingsSaving:false, activeTab:"dashboard", page:null, ready:false};
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"})[c]);
@@ -24,6 +24,8 @@ function humanError(error) {
     const message = String(error?.message || error);
     if (message.includes("configuration operation in progress")) return t("operationBusy");
     if (message.includes("server configuration changed")) return t("serverChanged");
+    if (message.includes("DNS update failed; previous value restored")) return t("restored");
+    if (message.includes("DNS update failed and restoring the previous value also failed")) return t("restoreFailed");
     if (/^HTTP 403:/.test(message) && (message.includes("webserver.api.app_sudo") || message.includes("Unable to export configuration"))) return t("appSudoDenied");
     if (message.includes("cannot reach Pi-hole")) return t("networkError");
     if (message.includes("session expired") || error?.status === 401) return t("sessionExpired");
@@ -111,8 +113,18 @@ function chartPalette() {
 }
 function showError(error) { toast(humanError(error), "err"); }
 function serverById(id) { return state.servers.find(s => s.id === id); }
+function acceptConfiguration(snapshot) {
+    const previous=new Map(state.servers.map(server=>[server.id,server]));
+    desktopRevision=snapshot.revision;
+    desktopConfig.servers=snapshot.config.servers.map(server=>({...server}));
+    state.servers=desktopConfig.servers.map(server=>{
+        const old=previous.get(server.id),same=old?.url===server.url && old?.password===server.password;
+        return {...server,revision:snapshot.revision,connected:!!(same && old.connected),checking:false};
+    });
+}
 async function api(server, path, {method="GET", body} = {}) {
-    const r = await nativeRequest(server.id, path, method, body === undefined ? "" : JSON.stringify(body), false);
+    const r = await nativeRequest(server.id, path, method, body === undefined ? "" : JSON.stringify(body), false,server.url,server.revision);
+    if(serverById(server.id)!==server)throw new Error("server configuration changed; refresh Settings and try again");
     let data;
     try { data = r.body ? JSON.parse(r.body) : null; } catch { data = r.body; }
     if (r.status < 200 || r.status >= 300) {
@@ -129,7 +141,7 @@ async function login(server, password) {
     server.checking = true; renderPills();
     state.page?.drawHealth?.();
     try {
-        await nativeLogin(server.id, password, server.url);
+        await nativeLogin(server.id, password, server.url,server.revision);
         if (serverById(server.id) !== server) return;
         server.password = password; server.connected = true; server.error = "";
         const configured = desktopConfig.servers.find(s => s.id === server.id);
@@ -169,10 +181,23 @@ function serverStatusTooltip(server,health) {
     const metrics=healthText(health);if(metrics)lines.push(metrics);
     return lines.join("\n");
 }
-function showServerVersions(server) {
+function serverVersionsHTML(server) {
     const info=hostHealth.get(server.id)?.versions,components=info?.components || [];
     const body=`<p>${textHTML("versionHelp")}</p>${!info || info.unavailable ? `<p class="notice warning">${textHTML("versionsUnavailable")}</p>` : `<div class="sk-table table-wrap"><table class="datatable"><thead><tr>${["component","installedVersion","latestVersion","status"].map(key=>`<th>${textHTML(key)}</th>`).join("")}</tr></thead><tbody>${components.map(item=>`<tr><td>${escapeHtml(versionLabel(item.component))}</td><td>${escapeHtml(item.local || "—")}</td><td>${escapeHtml(item.latest || "—")}</td><td><span class="version-state version-${item.status=== "update" ? "update" : "neutral"}">${escapeHtml(versionStatusText(item.status))}</span></td></tr>`).join("")}</tbody></table></div>`}${components.some(item=>item.component==="docker" && item.local) ? `<p class="notice">${textHTML("dockerUpgradeHelp")}</p>` : ""}${info?.checkedAt ? `<p class="count-note">${textHTML("versionChecked",{time:fmtDate(info.checkedAt)})}</p>` : ""}`;
-    showInspector(t("serverVersions",{server:server.label}),body);
+    return body;
+}
+function showServerVersions(server) {
+    const view=showInspector(t("serverVersions",{server:server.label}),serverVersionsHTML(server),`<button class="sk-button btn primary" data-check-versions>${textHTML("checkVersionsAgain")}</button>`);
+    $("[data-check-versions]",view.dialog).onclick=async event=>{
+        const button=event.currentTarget;button.disabled=true;button.textContent=t("checkingVersions");
+        try {
+            const versions=await nativeCheckVersions(server.id,server.url,server.revision);
+            if(serverById(server.id)!==server)return;
+            hostHealth.set(server.id,{...hostHealth.get(server.id),versions});renderPills();
+            if(inspector===view)setHTML($(".sk-dialog__body",view.dialog),serverVersionsHTML(server));
+        }catch(error){showError(error);}
+        finally{button.disabled=false;button.textContent=t("checkVersionsAgain");}
+    };
 }
 function renderPills() {
     updateViewChrome(state.page?.container);
@@ -352,9 +377,15 @@ async function startPolling(page, container, key, refresh) {
         clearTimeout(page.timer);
         if (page.active && !page.paused && interval > 0) page.timer = setTimeout(() => document.hidden ? schedule() : page.refresh(), interval);
     }
-    page.refresh = () => {
+    page.refresh = (fresh=false) => {
         if (!page.active) return Promise.resolve();
-        if (page.busy) return page.pending;
+        if (page.busy) {
+            if(!fresh)return page.pending;
+            // One fresh read after the current poll, even when several writes
+            // complete together. Never reuse a snapshot captured before a write.
+            page.freshPending ||= page.pending.then(()=>{page.freshPending=null;return page.refresh();});
+            return page.freshPending;
+        }
         clearTimeout(page.timer);
         page.busy = true;
         page.pending = (async () => {
@@ -372,7 +403,7 @@ async function startPolling(page, container, key, refresh) {
         if(pause && interval===0){if(previous>0)savePreference(key+"_resume_interval",previous);page.setPaused(true);}
         else {if(pause)savePreference(key+"_resume_interval",interval);if(pause && previous===0)page.setPaused(false);else schedule();}
     };
-    $("[data-refresh]", container).onclick = () => page.refresh();
+    $("[data-refresh]", container).onclick = () => {page.onManualRefresh?.();return page.refresh(true);};
     await page.refresh();
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && !state.page?.paused && state.page?.refresh) state.page.refresh(); });
@@ -592,7 +623,7 @@ async function renderDashboard(container,page) {
         const button=event.target.closest("[data-blocking]");if(!button || changingBlocking.has(button.dataset.blocking))return;
         const serverID=button.dataset.blocking;
         changingBlocking.add(serverID);button.disabled=true;
-        try {await api(serverById(serverID),"/dns/blocking",{method:"POST",body:{blocking:button.dataset.enable === "true"}});await page.refresh()}
+        try {await api(serverById(serverID),"/dns/blocking",{method:"POST",body:{blocking:button.dataset.enable === "true"}});await page.refresh(true)}
         catch(error){showError(error)}finally{changingBlocking.delete(serverID);if(page.active)draw()}
     });
     draw();
@@ -647,7 +678,7 @@ function statusLabel(status) {
 async function renderQueries(container, page) {
     const model = {...{range:6,filter:"",server:"all",client:"all",type:"all",status:"all",pageSize:50,page:0,sort:"time",direction:-1},...preference("queries",{})};
     const rows = new Map(), cursors = new Map(), clientNames = new Map(), latest = new Map(), changingDomains = new Set();
-    let resetRequested = true, limited = false, displayedAt=Date.now()/1000;
+    let resetRequested = true, limited = false, displayedAt=Date.now()/1000,lastReconciled=0;
     const option = (value,label,selected) => `<option value="${escapeHtml(value)}" ${String(value) === String(selected) ? "selected" : ""}>${escapeHtml(label)}</option>`;
     container.innerHTML = `<div class="page-controls queries-controls"><label class="host-controls control-field"><span>${textHTML("server")}</span><select class="sk-select" data-server-filter>${option("all",t("all"),model.server)}${state.servers.map(s=>option(s.id,s.label,model.server)).join("")}</select></label>${refreshControls("queries")}</div><div class="toolbar query-filters">
         <label>${textHTML("range")}<select class="sk-select" data-range>${[[1,"hour"],[6,"hours"],[24,"hours"],[72,"days"],[168,"days"]].map(([n,key])=>option(n,t(key,{n:n>24?n/24:n}),model.range)).join("")}</select></label>
@@ -747,6 +778,7 @@ async function renderQueries(container, page) {
         } catch (error) {showError(error);button.disabled=false;}
     };
     page.onPauseChange=draw;
+    page.onManualRefresh=()=>{resetRequested=true;};
     draw();
     await startPolling(page,container,"queries",async()=>{
         const reset=resetRequested,range=model.range,generation=page.pollGeneration;
@@ -755,7 +787,9 @@ async function renderQueries(container, page) {
         await Promise.all(state.servers.filter(s=>s.connected).map(async server=>{
             const previousLatest=latest.get(server.id);
             try {
-                const since=reset || previousLatest===undefined ? from : Math.max(from,Math.floor(previousLatest)-1);
+                const unfinished=[...rows.values()].filter(q=>q.server.id===server.id && (queryOutcome(q.status)==="pending" || !q.reply?.type || q.reply.type==="UNKNOWN")).map(q=>Number(q.time));
+                const reconcile=until-lastReconciled>=60;
+                const since=reset || reconcile || previousLatest===undefined ? from : Math.max(from,Math.floor(Math.min(previousLatest-30,...unfinished))-1);
                 const result=await api(server,`/queries?length=1000&from=${since}&until=${until}`);
                 if(!page.active || page.pollGeneration!==generation || model.range!==range)return;
                 const queries=[...(result?.queries || [])],metadata=[];
@@ -765,6 +799,7 @@ async function renderQueries(container, page) {
                 if(!reset && previousLatest!==undefined){
                     let cursor=result?.cursor;const seen=new Set();
                     while(cursor && !seen.has(String(cursor))){
+                        if(queries.length>=50000){truncated=true;break;}
                         if(!page.active || page.pollGeneration!==generation || model.range!==range)return;
                         seen.add(String(cursor));
                         const next=await api(server,`/queries?length=1000&from=${since}&until=${until}&cursor=${encodeURIComponent(cursor)}`);
@@ -779,6 +814,7 @@ async function renderQueries(container, page) {
         if(!page.active || page.pollGeneration!==generation || model.range!==range)return null;
         if(reset){rows.clear();cursors.clear();latest.clear();limited=false;resetRequested=false;}
         displayedAt=until;
+        if(until-lastReconciled>=60 && errors.length===0)lastReconciled=until;
         for(const item of staged){
             merge(item.server,{queries:item.queries});limited ||= item.truncated;
             if(reset || !cursors.has(item.server.id))cursors.set(item.server.id,{from,until,cursor:item.cursor});
@@ -846,10 +882,11 @@ async function renderListSearch(container,page) {
 const RECORD_PATHS = {domains:"/domains",hosts:"/config/dns/hosts",clients:"/clients",lists:"/lists"};
 function recordKey(kind, item) {
     if (kind === "domains") return JSON.stringify([item.domain,item.type,item.kind]);
-    if (kind === "hosts") return item.name.toLowerCase();
+    if (kind === "hosts") return JSON.stringify([dnsRecordGroup(item),item.ip.includes(":") ? new URL("http://["+item.ip+"]/").hostname.toLowerCase() : item.ip]);
     if (kind === "clients") return String(item.client).toUpperCase();
     return JSON.stringify([item.address,item.type]);
 }
+function dnsRecordGroup(item){return (item.ip.includes(":") ? "AAAA/" : "A/")+item.name.split(/\s+/)[0].toLowerCase();}
 function recordName(kind, item) { return kind === "domains" ? item.domain : kind === "hosts" ? item.name : kind === "clients" ? item.client : item.address; }
 function recordItems(kind, data) {
     if (kind !== "hosts") return data?.[kind] || [];
@@ -908,18 +945,12 @@ function wildcardDomain(value) {
 }
 async function sendRecordRequest(server, request) { return api(server,request.path,request); }
 async function replaceDNS(server, existing, next) {
-    await api(server,recordDeletePath("hosts",existing),{method:"DELETE"});
-    try {await sendRecordRequest(server,recordCreateRequest("hosts",next));}
-    catch (error) {
-        try {await sendRecordRequest(server,recordCreateRequest("hosts",existing));}
-        catch {throw new Error(t("restoreFailed"));}
-        throw new Error(t("restored"));
-    }
+    await nativeReplaceDNS(server.id,server.url,server.revision,existing.raw,next.raw);
 }
 async function renderRecords(container, page, kind) {
     const model = {...{filter:"",pageSize:50,page:0,sort:"name",direction:1,targets:state.servers.map(s=>s.id)},...preference("records_"+kind,{})};
     const selected = new Set(), byServer = new Map(), loaded = new Set();
-    let merged = new Map(), visible = [], working = false;
+    let merged = new Map(), visible = [], working = false,loadGeneration=0;
     const toggleable = kind === "domains" || kind === "lists";
     const options = (values, selectedValue) => values.map(([value,key])=>`<option value="${value}" ${value === selectedValue ? "selected" : ""}>${textHTML(key)}</option>`).join("");
     container.innerHTML = `<div class="sk-card card"><h2>${textHTML("addMany")} · ${textHTML(kind)}</h2>
@@ -947,10 +978,22 @@ async function renderRecords(container, page, kind) {
     const remember = () => savePreference("records_"+kind,model);
     function rebuild() {
         merged = new Map();
-        for (const [id,items] of byServer) for (const item of items) {
-            const key = recordKey(kind,item);
+        for (const [id,items] of byServer) {
+          const pending=[];
+          // Preserve matching IPs before pairing changed values across hosts.
+          for(const item of items){
+            const key=recordKey(kind,item),row=merged.get(key);
+            if(row && !row.byServer.has(id))row.byServer.set(id,item);else pending.push(item);
+          }
+          for (const item of pending) {
+            let key = recordKey(kind,item);
+            if(kind === "hosts"){
+                const row=[...merged.values()].find(row=>!row.byServer.has(id) && dnsRecordGroup(row.item)===dnsRecordGroup(item));
+                if(row)key=row.key;
+            }
             if (!merged.has(key)) merged.set(key,{key,item,sourceId:id,byServer:new Map()});
             merged.get(key).byServer.set(id,item);
+          }
         }
         for (const key of selected) if (!merged.has(key)) selected.delete(key);
     }
@@ -991,15 +1034,16 @@ async function renderRecords(container, page, kind) {
         for (const th of $$("[data-sort]",container)) th.setAttribute("aria-sort",th.dataset.sort === model.sort ? model.direction === 1 ? "ascending" : "descending" : "none");
     }
     async function loadServers(servers) {
+        const generation=++loadGeneration;
         const errors = [];
         await Promise.all(servers.map(async server=>{
             if (!server.connected) {loaded.delete(server.id);return;}
             try {
                 const data = await api(server,RECORD_PATHS[kind]);
-                if (page.active) {byServer.set(server.id,recordItems(kind,data));loaded.add(server.id);}
-            } catch (error) {loaded.delete(server.id);errors.push(server.label+": "+humanError(error));}
+                if (page.active && generation===loadGeneration) {byServer.set(server.id,recordItems(kind,data));loaded.add(server.id);}
+            } catch (error) {if(generation===loadGeneration){loaded.delete(server.id);errors.push(server.label+": "+humanError(error));}}
         }));
-        if (page.active) {rebuild();draw();$("[data-record-status]",container).textContent = errors.join(" · ") || (state.servers.some(s=>s.connected) ? "" : t("loginRequired"));}
+        if (page.active && generation===loadGeneration) {rebuild();draw();$("[data-record-status]",container).textContent = errors.join(" · ") || (state.servers.some(s=>s.connected) ? "" : t("loginRequired"));}
     }
     async function runChanges(operation) {
         if (working) return;
@@ -1008,6 +1052,7 @@ async function renderRecords(container, page, kind) {
         let completed=0,failed=0,conflicts=0;
         const touched = new Set();
         const execute = async (server,fn) => {
+            if(!page.active)return;
             touched.add(server.id);
             try {if (!server.connected) throw new Error(t("loginRequired"));await fn();completed++;}
             catch (error) {failed++;toast(server.label+": "+humanError(error),"err");}
@@ -1035,7 +1080,7 @@ async function renderRecords(container, page, kind) {
                     else if ((action === "copy" || action === "sync") && source) {
                         if (!existing) await execute(server,()=>kind === "hosts"
                             ? sendRecordRequest(server,recordCreateRequest(kind,source))
-                            : nativeCopyRecord(sourceId || row.sourceId,server.id,kind,source));
+                            : nativeCopyRecord(sourceId || row.sourceId,server.id,kind,source,serverById(sourceId || row.sourceId).url,server.url,server.revision));
                         else if (kind === "hosts" && existing.ip !== source.ip) {
                             if (action === "sync" && await confirmAction(t("dnsReplaceConfirm",{server:server.label}),{title:t("hosts"),action:t("copy"),danger:true}) && page.active) await execute(server,()=>replaceDNS(server,existing,source));
                             else conflict();
@@ -1228,7 +1273,7 @@ async function backupServer(server) {
     const previous=backupState.servers.get(server.id);
     if(previous?.running && previous.url === server.url)return;
     const value={url:server.url,running:true};backupState.servers.set(server.id,value);notifyBackup();
-    try {Object.assign(value,await nativeBackupServer(server.id));toast(server.label+": "+t("backupSaved",{path:value.path}),"ok");}
+    try {Object.assign(value,await nativeBackupServer(server.id,server.url,server.revision));toast(server.label+": "+t("backupSaved",{path:value.path}),"ok");}
     catch(error) {
         value.error=humanError(error);
         if(String(error.message || error).includes("session expired") && serverById(server.id)?.url === server.url){serverById(server.id).connected=false;renderPills();}
@@ -1257,7 +1302,7 @@ function fileAsBase64(file) {
     });
 }
 async function performRestore(file,server,options) {
-    if(restoreState.running)return;
+    if(restoreState.running || state.settingsSaving)return;
     if(!file || file.size>(server ? 49*1024*1024 : 2*1024*1024)){showError(new Error(t("restoreFileLimit")));return;}
     if(server && (!server.connected || !RESTORE_SECTIONS.some(key=>options[key])))return;
     const target=server ? server.label+" ("+server.url+")" : t("restoreAppTarget");
@@ -1267,12 +1312,12 @@ async function performRestore(file,server,options) {
     try {
         let result;
         if(server) {
-            result=await nativeRestoreServer(server.id,await fileAsBase64(file),options);
+            result=await nativeRestoreServer(server.id,await fileAsBase64(file),options,server.url,server.revision);
             if(serverById(server.id)?.url===server.url){serverById(server.id).connected=false;hostHealth.delete(server.id);}
         } else {
             result=await restoreAppSettings(await file.text());
-            desktopConfig.servers=result.config.servers;desktopConfig.preferences=result.config.preferences;
-            state.servers=result.config.servers.map(s=>({...s,connected:false,checking:false}));
+            acceptConfiguration(result);desktopConfig.preferences=result.config.preferences;
+            for(const server of state.servers)server.connected=false;
             hostHealth.clear();backupState.servers.clear();backupState.config=null;
             currentLanguage=localStorage.getItem("ph_combo_language") || "en";
             if(!UI_LANGUAGES.includes(currentLanguage))currentLanguage="en";
@@ -1284,7 +1329,14 @@ async function performRestore(file,server,options) {
         restoreState.error=humanError(error);
         if(server && String(error.message || error).includes("session expired") && serverById(server.id)?.url===server.url){serverById(server.id).connected=false;renderPills();}
     }
-    finally {restoreState.running=false;notifyBackup();}
+    finally {
+        if(server){
+            try {const snapshot=await nativeConfiguration();if(snapshot.revision!==desktopRevision)acceptConfiguration(snapshot);}
+            catch(error){showError(error);}
+        }
+        restoreState.running=false;notifyBackup();renderPills();
+        if(server && state.activeTab!=="settings")await switchTab(state.activeTab);
+    }
 }
 function renderRestore(container,page) {
     const card=document.createElement("div");card.className="sk-card card restore-settings";container.append(card);
@@ -1292,7 +1344,7 @@ function renderRestore(container,page) {
         <form data-restore-server-form><fieldset><legend>${textHTML("restoreServer")}</legend>
         ${field("restoreTarget",'<select class="sk-select" data-restore-target required></select>')}
         ${field("restoreZIP",'<input type="file" accept=".zip,application/zip" data-restore-zip required>')}
-        <div class="restore-sections">${RESTORE_SECTIONS.map(key=>`<label><input type="checkbox" data-restore-section="${key}" ${key==="config" || key==="dhcp_leases" ? "" : "checked"}> ${textHTML("restoreSection_"+key)}</label>`).join("")}</div>
+        <div class="restore-sections">${["config","dhcp_leases","groups"].map(key=>`<label><input type="checkbox" data-restore-section="${key}" ${key==="groups" ? "checked" : ""}> ${textHTML("restoreSection_"+(key==="groups" ? "blocking" : key))}</label>`).join("")}</div>
         <p class="sub">${textHTML("restoreSectionsHelp")}</p><button class="sk-button btn" data-restore-server type="submit">${textHTML("restoreServer")}</button></fieldset></form>
         <form data-restore-config-form><fieldset><legend>${textHTML("restoreConfig")}</legend>
         ${field("restoreJSON",'<input type="file" accept=".json,application/json" data-restore-json required>')}
@@ -1304,15 +1356,16 @@ function renderRestore(container,page) {
         const chosen=target.value;
         setHTML(target,state.servers.filter(s=>s.url).map(s=>`<option value="${s.id}">${escapeHtml(s.label+" · "+s.url)}</option>`).join(""));
         if(serverById(chosen)?.url)target.value=chosen;
-        $("[data-restore-server]",card).disabled=restoreState.running || !serverById(target.value)?.connected || ! $$("[data-restore-section]:checked",card).length;
-        $("[data-restore-config]",card).disabled=restoreState.running;
-        for(const control of $$("input,select",card))control.disabled=restoreState.running;
+        $("[data-restore-server]",card).disabled=restoreState.running || state.settingsSaving || !serverById(target.value)?.connected || ! $$("[data-restore-section]:checked",card).length;
+        $("[data-restore-config]",card).disabled=restoreState.running || state.settingsSaving;
+        for(const control of $$("input,select",card))control.disabled=restoreState.running || state.settingsSaving;
         const status=$("[data-restore-status]",card);status.textContent=restoreState.running ? t("restoreRunning") : restoreState.error || restoreState.result;
         status.classList.toggle("backup-error",!!restoreState.error);
     };
     card.onchange=update;
     $("[data-restore-server-form]",card).onsubmit=event=>{
         event.preventDefault();if(!serverById(target.value))return;const options=Object.fromEntries($$("[data-restore-section]",card).map(input=>[input.dataset.restoreSection,input.checked]));
+        options.domains=options.lists=options.clients=options.groups;
         return performRestore($("[data-restore-zip]",card).files[0],serverById(target.value),options);
     };
     $("[data-restore-config-form]",card).onsubmit=event=>{event.preventDefault();return performRestore($("[data-restore-json]",card).files[0],null,null);};
@@ -1352,6 +1405,7 @@ async function renderSettings(container, page) {
         $("#desktopAdd",container).disabled=rows.length >= 10;
     }
     area.onchange=event=>{
+        if(state.settingsSaving)return;
         if (!event.target.matches("[data-role]")) return;
         readRows();const id=event.target.closest("[data-server]").dataset.server;
         if (event.target.value === "main") rows.forEach(s=>s.role=s.id === id ? "main" : "secondary");
@@ -1359,31 +1413,34 @@ async function renderSettings(container, page) {
         draw();
     };
     area.onclick=event=>{
+        if(state.settingsSaving)return;
         const button=event.target.closest("[data-remove]");if (!button) return;
         readRows();rows=rows.filter(s=>s.id !== button.dataset.remove);if (!rows.some(s=>s.role === "main")) rows[0].role="main";draw();
     };
     $("#desktopAdd",container).onclick=()=>{
+        if(state.settingsSaving)return;
         readRows();const id=Array.from({length:10},(_,i)=>String(i+1)).find(id=>!rows.some(s=>s.id === id));
         if (id) rows.push({id,label:"Pi-hole "+id,url:"",password:"",role:"secondary"});draw();
     };
     $("#desktopSettings",container).onsubmit=async event=>{
-        event.preventDefault();if(restoreState.running || saving || state.servers.some(s=>s.checking))return;readRows();
-        saving=true;
+        event.preventDefault();if(restoreState.running || state.settingsSaving || saving || state.servers.some(s=>s.checking))return;readRows();
+        saving=true;state.settingsSaving=true;
+        const submitted=rows.map(server=>({...server}));
+        for(const control of $$("input,select,button",$("#desktopSettings",container)))control.disabled=true;
         const button=$("button[type=submit]",container);button.disabled=true;
         const status=$("[data-settings-status]",container);status.textContent=t("connecting");
         try {
-            await nativeSaveServers(rows);
-            const previous=new Map(state.servers.map(s=>[s.id,s]));
-            desktopConfig.servers=rows.map(s=>({...s}));
-            state.servers=rows.map(s=>{
-                const old=previous.get(s.id),same=old?.url === s.url && old?.password === s.password;
-                return {...s,connected:!!(same && old.connected),checking:false};
-            });
+            const snapshot=await nativeSaveServers(submitted);
+            acceptConfiguration(snapshot);rows=desktopConfig.servers.map(server=>({...server}));
             await Promise.all(state.servers.filter(s=>s.url && s.password && !s.connected).map(async s=>{try {await login(s,s.password);} catch (error) {toast(s.label+": "+humanError(error),"err");}}));
             if (page.active) {status.textContent=t("saved");toast(t("saved"),"ok");}
             renderPills();page.drawHealth?.();
         } catch (error) {if (page.active) status.textContent=t("saveError");showError(error);}
-        finally {saving=false;page.drawHealth?.();}
+        finally {
+            saving=false;state.settingsSaving=false;
+            if(page.active){draw();page.drawHealth?.();}
+            else await switchTab(state.activeTab);
+        }
     };
     const appearance=document.createElement("div");appearance.className="sk-card card";container.append(appearance);
     appearance.innerHTML=`<h2>${textHTML("appearance")}</h2><p class="sub" data-app-build>${textHTML("appBuild")}: <span class="mono">${escapeHtml(desktopBuild.version)} · ${escapeHtml(desktopBuild.uiRevision)}</span></p>${field("interfaceDensity",`<select class="sk-select" data-interface-density><option value="dense">${textHTML("denseDensity")}</option><option value="compact">${textHTML("compactDensity")}</option><option value="comfortable">${textHTML("comfortableDensity")}</option></select>`)}`;
@@ -1409,6 +1466,9 @@ async function renderSettings(container, page) {
     page.drawHealth=()=>{
         if(!page.active)return;
         drawRestore();
+        for(const control of $$("input,select,button",$("#desktopSettings",container)))control.disabled=state.settingsSaving || restoreState.running;
+        $("#desktopAdd",container).disabled=state.settingsSaving || restoreState.running || rows.length>=10;
+        for(const button of $$("[data-remove]",area))button.disabled=state.settingsSaving || restoreState.running || rows.length===1;
         $("#desktopSettings button[type=submit]",container).disabled=restoreState.running || saving || state.servers.some(s=>s.checking);
         $("[data-backup-all]",backups).disabled=restoreState.running || !state.servers.some(s=>s.url && s.connected && !(backupState.servers.get(s.id)?.url === s.url && backupState.servers.get(s.id)?.running));
         $("[data-backup-config]",backups).disabled=restoreState.running || !!backupState.config?.running;
@@ -1436,8 +1496,8 @@ async function renderSettings(container, page) {
     const onBackup=()=>page.drawHealth();document.addEventListener("backup-progress",onBackup);
     page.dispose=()=>document.removeEventListener("backup-progress",onBackup);
     bindSettingsLogins(health,{get active(){return page.active},refresh:async()=>page.drawHealth()});
-    page.drawHealth();
     draw();
+    page.drawHealth();
 }
 
 const gravityState = new Map();
@@ -1480,7 +1540,7 @@ async function renderGravity(container, page) {
         const value={running:true,text:""};gravityState.set(server.id,value);notify(server);
         let stream;
         try {
-            const r=await nativeRequest(server.id,"/action/gravity?color=false","POST","",true);
+            const r=await nativeRequest(server.id,"/action/gravity?color=false","POST","",true,server.url,server.revision);
             if (r.status < 200 || r.status >= 300) throw new Error("HTTP "+r.status);
             stream=r.stream;
             const decoder=new TextDecoder();

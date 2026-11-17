@@ -22,6 +22,17 @@ type BackupResult struct {
 
 // Teleporter is binary data. Consume the authenticated response directly in Go,
 // rather than passing ZIP bytes through the WebView's JSON/string transport.
+func (a *App) BackupServerAtServer(id, expectedURL string, revision uint64) (BackupResult, error) {
+	if !a.operationMu.TryRLock() {
+		return BackupResult{}, errOperationBusy
+	}
+	defer a.operationMu.RUnlock()
+	if err := a.checkServer(id, expectedURL, revision); err != nil {
+		return BackupResult{}, err
+	}
+	return a.BackupServer(id)
+}
+
 func (a *App) BackupServer(id string) (BackupResult, error) {
 	if _, err := a.server(id); err != nil {
 		return BackupResult{}, err

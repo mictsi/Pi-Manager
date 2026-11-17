@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -8,6 +9,7 @@ import (
 type HostHealth struct {
 	Versions      *HostVersions `json:"versions,omitempty"`
 	url           string
+	revision      uint64
 	ID            string   `json:"id"`
 	Authenticated bool     `json:"authenticated"`
 	Reachable     bool     `json:"reachable"`
@@ -22,6 +24,7 @@ type HostHealth struct {
 type HealthMonitor struct {
 	versionMu    sync.Mutex
 	versionCache map[string]versionSample
+	versionLocks map[string]*sync.Mutex
 	app          *App
 	mu           sync.RWMutex
 	hosts        []HostHealth
@@ -39,18 +42,25 @@ func (m *HealthMonitor) Get() []HostHealth {
 	for _, s := range cfg.Servers {
 		h := HostHealth{ID: s.ID}
 		for _, sample := range m.hosts {
-			if sample.ID == s.ID && sample.url == s.URL {
+			if sample.ID == s.ID && sample.url == s.URL && sample.revision == m.app.revision.Load() {
 				h = sample
 				break
 			}
 		}
+		m.versionMu.Lock()
+		if cached, ok := m.versionCache[s.ID+"\x00"+s.URL]; ok && cached.revision == m.app.revision.Load() {
+			h.Versions = cached.value
+		}
+		m.versionMu.Unlock()
 		h.Authenticated = m.app.sessions[s.ID].url == s.URL && m.app.sessions[s.ID].sid != "" && !m.app.loggedOut[s.ID]
 		result = append(result, h)
 	}
 	return result
 }
 func (m *HealthMonitor) sampleHost(id string) HostHealth {
-	h := HostHealth{ID: id, SampledAt: time.Now().Unix()}
+	ctx, cancel := context.WithTimeout(m.app.ctx, 8*time.Second)
+	defer cancel()
+	h := HostHealth{ID: id, SampledAt: time.Now().Unix(), revision: m.app.revision.Load()}
 	server, err := m.app.server(id)
 	if err != nil {
 		return h
@@ -65,7 +75,7 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 	var blocking struct {
 		Blocking string `json:"blocking"`
 	}
-	err = m.app.jsonAPI(id, "/dns/blocking", "GET", nil, &blocking)
+	err = m.app.jsonAPIContext(ctx, id, "/dns/blocking", "GET", nil, &blocking)
 	// A saved app password permits recovery from expired sessions in the background.
 	if err != nil {
 		s, e := m.app.server(id)
@@ -83,8 +93,8 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 			}
 			m.retryMu.Unlock()
 			if sess.sid == "" && retry {
-				if e = m.app.login(id, "", true); e == nil {
-					err = m.app.jsonAPI(id, "/dns/blocking", "GET", nil, &blocking)
+				if e = m.app.loginContext(ctx, id, "", server.URL, true); e == nil {
+					err = m.app.jsonAPIContext(ctx, id, "/dns/blocking", "GET", nil, &blocking)
 				}
 			}
 		}
@@ -97,7 +107,7 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 	m.app.mu.Unlock()
 	h.Reachable = true
 	h.Blocking = blocking.Blocking
-	h.Versions = m.versions(id, server.URL)
+	h.Versions = m.versionsContext(ctx, id, server.URL, false)
 	var system struct {
 		System struct {
 			CPU struct {
@@ -113,7 +123,7 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 			} `json:"memory"`
 		} `json:"system"`
 	}
-	if m.app.jsonAPI(id, "/info/system", "GET", nil, &system) == nil {
+	if m.app.jsonAPIContext(ctx, id, "/info/system", "GET", nil, &system) == nil {
 		if system.System.CPU.Percent != nil && *system.System.CPU.Percent >= 0 {
 			h.CPU = system.System.CPU.Percent
 		}
@@ -128,11 +138,28 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 			Unit        string   `json:"unit"`
 		} `json:"sensors"`
 	}
-	if m.app.jsonAPI(id, "/info/sensors", "GET", nil, &sensors) == nil {
+	if m.app.jsonAPIContext(ctx, id, "/info/sensors", "GET", nil, &sensors) == nil {
 		h.Temperature = sensors.Sensors.Temperature
 		h.Unit = sensors.Sensors.Unit
 	}
 	return h
+}
+
+func (m *HealthMonitor) publish(host HostHealth) {
+	m.versionMu.Lock()
+	if cached, ok := m.versionCache[host.ID+"\x00"+host.url]; ok && cached.revision == host.revision {
+		host.Versions = cached.value
+	}
+	m.versionMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.hosts {
+		if m.hosts[i].ID == host.ID {
+			m.hosts[i] = host
+			return
+		}
+	}
+	m.hosts = append(m.hosts, host)
 }
 func (m *HealthMonitor) Sample() {
 	servers := m.app.config.Get().Servers
@@ -147,31 +174,41 @@ func (m *HealthMonitor) Sample() {
 			} else {
 				hosts[i] = HostHealth{ID: s.ID}
 			}
+			m.publish(hosts[i])
 		}(i, s)
 	}
 	wg.Wait()
-	m.mu.Lock()
-	m.hosts = hosts
-	m.mu.Unlock()
 }
 
 // Runs independently of the WebView: document.hidden never suspends monitoring.
 func (m *HealthMonitor) Run(update func([]HostHealth)) {
 	timer := time.NewTimer(3 * time.Second)
 	defer timer.Stop()
+	results := make(chan HostHealth, 10)
+	inFlight := map[string]bool{}
 	for {
 		select {
 		case <-m.app.ctx.Done():
 			return
 		case <-timer.C:
-			m.Sample()
-			select {
-			case <-m.app.ctx.Done():
-				return
-			default:
+			for _, server := range m.app.config.Get().Servers {
+				if server.URL == "" || inFlight[server.ID] {
+					continue
+				}
+				inFlight[server.ID] = true
+				go func(id string) {
+					host := m.sampleHost(id)
+					select {
+					case results <- host:
+					case <-m.app.ctx.Done():
+					}
+				}(server.ID)
 			}
-			update(m.Get())
 			timer.Reset(5 * time.Second)
+		case host := <-results:
+			delete(inFlight, host.ID)
+			m.publish(host)
+			update(m.Get())
 		}
 	}
 }

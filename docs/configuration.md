@@ -108,8 +108,9 @@ In Settings, open **Restore configuration**:
 
 - **Restore Pi-hole server**: log in, choose the target server and a Teleporter
   ZIP, select the sections to replace, then confirm the file and destination.
-  Domains, lists and clients include their group assignments. Include groups
-  when restoring assignments from another server. Pi-hole settings include
+  Blocking configuration restores groups, domains, lists and clients together,
+  preserving their group assignments. These are one restore selection because
+  restoring only some tables can assign policies to the wrong groups. Pi-hole settings include
   local DNS, network and API settings, so restoring these can change how you
   connect to the server. ZIP uploads are limited to 49 MiB.
 - **Restore app settings**: choose a Pi-Manager settings JSON backup (up to

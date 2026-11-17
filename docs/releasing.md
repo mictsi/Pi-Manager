@@ -9,9 +9,11 @@ After committing the source and workflow to your GitHub repository, create and
 push a new version tag. Alternatively, publish a release through the GitHub UI
 using a tag that contains the workflow.
 
-The workflow runs race tests and `go vet`, builds Windows, Linux and macOS for
-amd64 and ARM64, packages the artifacts, verifies checksums and checks the Linux
-executable's embedded version. It creates a release with generated notes, or
+The workflow uses the Go version declared by the project. It runs frontend
+regression tests (including embedded chart updates), race tests, `go vet`, and
+the native desktop regression test under Xvfb. It then builds Windows, Linux
+and macOS for amd64 and ARM64, packages the artifacts, verifies checksums and
+checks the Linux executable's embedded version. It creates a release with generated notes, or
 adds artifacts to an existing release without replacing its notes.
 
 The tag supplies the built version automatically. Update the source default as

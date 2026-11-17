@@ -136,7 +136,7 @@ func TestRestoreRejectsConcurrentMutations(t *testing.T) {
 	})
 	done := make(chan error, 1)
 	go func() {
-		_, err := a.RestoreServer("1", base64.StdEncoding.EncodeToString(archive), RestoreOptions{Domains: true})
+		_, err := a.RestoreServer("1", base64.StdEncoding.EncodeToString(archive), RestoreOptions{Groups: true, Domains: true, Lists: true, Clients: true})
 		done <- err
 	}()
 	<-started

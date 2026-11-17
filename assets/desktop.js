@@ -2,7 +2,7 @@
 (() => {
     // The native wrapper rejects with JSON strings; give the dashboard the
     // Error objects its existing error handlers expect.
-    for (const name of ["nativeRequest", "nativeLogin", "nativeReadStream", "nativeCancelStream", "nativeSaveServers", "nativeBackupServer", "nativeBackupConfig", "nativeRestoreServer", "nativeRestoreConfig", "nativePreference", "nativeUIError", "nativePreviewSync", "nativeApplySync", "nativeCopyRecord", "nativeMonitor", "nativeTrayStatus", "nativeExitReady", "nativeExitDecision"]) {
+    for (const name of ["nativeRequest", "nativeLogin", "nativeReadStream", "nativeCancelStream", "nativeSaveServers", "nativeConfiguration", "nativeReplaceDNS", "nativeCheckVersions", "nativeBackupServer", "nativeBackupConfig", "nativeRestoreServer", "nativeRestoreConfig", "nativePreference", "nativeUIError", "nativePreviewSync", "nativeApplySync", "nativeCopyRecord", "nativeMonitor", "nativeTrayStatus", "nativeExitReady", "nativeExitDecision"]) {
         const invoke = window[name];
         window[name] = async (...args) => {
             try { return await invoke(...args); }
@@ -44,7 +44,8 @@
         const match = String(path).match(/^\/api(10|[1-9])(\/.*)$/);
         if (!match) throw new Error("Only configured Pi-hole API requests are supported");
         const streaming = match[2].startsWith("/action/gravity");
-        const r = await nativeRequest(match[1], match[2], options.method || "GET", options.body || "", streaming);
+        const server=state.servers.find(s=>s.id===match[1]);
+        const r = await nativeRequest(match[1], match[2], options.method || "GET", options.body || "", streaming,server?.url || "",server?.revision ?? desktopRevision);
         let body = r.status === 204 ? null : r.body;
         if (r.stream) {
             body = new ReadableStream({

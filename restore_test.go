@@ -46,14 +46,14 @@ func TestRestoreServerMultipartAndSafetyBackup(t *testing.T) {
 		if err := json.Unmarshal([]byte(r.FormValue("import")), &flags); err != nil {
 			t.Fatal(err)
 		}
-		want := map[string]bool{"group": true, "domainlist": true, "domainlist_by_group": true, "adlist": false, "adlist_by_group": false, "client": false, "client_by_group": false}
+		want := map[string]bool{"group": true, "domainlist": true, "domainlist_by_group": true, "adlist": true, "adlist_by_group": true, "client": true, "client_by_group": true}
 		if flags.Config || flags.DHCP || !reflect.DeepEqual(flags.Gravity, want) {
 			t.Fatalf("unexpected restore flags: %+v", flags)
 		}
 		return jsonResponse(200, `{"files":["etc/pihole/gravity.db->group","etc/pihole/gravity.db->domainlist"]}`), nil
 	})
 	a.sessions["2"] = session{url: a.config.Get().Servers[1].URL, sid: "restore-session-secret"}
-	result, err := a.RestoreServer("2", base64.StdEncoding.EncodeToString(archive), RestoreOptions{Groups: true, Domains: true})
+	result, err := a.RestoreServer("2", base64.StdEncoding.EncodeToString(archive), RestoreOptions{Groups: true, Domains: true, Lists: true, Clients: true})
 	if err != nil {
 		t.Fatal(err)
 	}

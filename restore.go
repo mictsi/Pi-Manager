@@ -26,16 +26,32 @@ type RestoreOptions struct {
 
 type RestoreResult struct {
 	SafetyBackup BackupResult `json:"safetyBackup"`
+	Revision     uint64       `json:"revision"`
 }
 
 type ConfigRestoreResult struct {
 	Config       Config       `json:"config"`
 	SafetyBackup BackupResult `json:"safetyBackup"`
+	Revision     uint64       `json:"revision"`
 }
 
 func (a *App) RestoreServer(id, encoded string, options RestoreOptions) (RestoreResult, error) {
+	return a.restoreServer(id, encoded, options, nil)
+}
+
+func (a *App) RestoreServerAtServer(id, encoded string, options RestoreOptions, expectedURL string, revision uint64) (RestoreResult, error) {
+	return a.restoreServer(id, encoded, options, func() error { return a.checkServer(id, expectedURL, revision) })
+}
+
+func (a *App) restoreServer(id, encoded string, options RestoreOptions, check func() error) (RestoreResult, error) {
 	if !options.Config && !options.DHCPLeases && !options.Groups && !options.Domains && !options.Lists && !options.Clients {
 		return RestoreResult{}, errors.New("choose at least one section to restore")
+	}
+	// Teleporter imports raw group IDs. Replacing only part of this relational
+	// data can silently change the policy of restored or retained records.
+	blocking := options.Groups || options.Domains || options.Lists || options.Clients
+	if blocking && !(options.Groups && options.Domains && options.Lists && options.Clients) {
+		return RestoreResult{}, errors.New("restore groups, domains, lists and clients together to preserve group memberships")
 	}
 	data, err := decodeRestore(encoded, maxRestoreBytes)
 	if err != nil {
@@ -51,6 +67,11 @@ func (a *App) RestoreServer(id, encoded string, options RestoreOptions) (Restore
 	// Keep server addresses and drift plans stable for the backup and import.
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
+	if check != nil {
+		if err := check(); err != nil {
+			return RestoreResult{}, err
+		}
+	}
 	lock := a.authLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -85,6 +106,7 @@ func (a *App) RestoreServer(id, encoded string, options RestoreOptions) (Restore
 		return RestoreResult{}, errors.New("could not prepare restore upload")
 	}
 	a.syncPlan = nil
+	a.revision.Add(1)
 	response, err := a.request(id, "/teleporter", "POST", &body, form.FormDataContentType(), false)
 	if err == nil {
 		err = responseError(response)
@@ -110,7 +132,7 @@ func (a *App) RestoreServer(id, encoded string, options RestoreOptions) (Restore
 		return RestoreResult{}, fmt.Errorf("restore did not complete successfully; check the server before retrying (pre-restore backup: %s): %w", safety.Path, err)
 	}
 	a.log.Info("server configuration restored", "server", id)
-	return RestoreResult{SafetyBackup: safety}, nil
+	return RestoreResult{SafetyBackup: safety, Revision: a.revision.Load()}, nil
 }
 
 func (a *App) RestoreConfig(contents string) (ConfigRestoreResult, error) {
@@ -146,6 +168,7 @@ func (a *App) RestoreConfig(contents string) (ConfigRestoreResult, error) {
 		return ConfigRestoreResult{}, fmt.Errorf("could not save restored settings (pre-restore backup: %s): %w", safety.Path, err)
 	}
 	a.syncPlan = nil
+	a.revision.Add(1)
 	a.mu.Lock()
 	a.sessions = map[string]session{}
 	for i := 1; i <= 10; i++ {
@@ -153,7 +176,7 @@ func (a *App) RestoreConfig(contents string) (ConfigRestoreResult, error) {
 	}
 	a.mu.Unlock()
 	a.log.Info("app configuration restored", "servers", len(cfg.Servers))
-	return ConfigRestoreResult{Config: cfg, SafetyBackup: safety}, nil
+	return ConfigRestoreResult{Config: cfg, SafetyBackup: safety, Revision: a.revision.Load()}, nil
 }
 
 func decodeRestore(encoded string, limit int) ([]byte, error) {
