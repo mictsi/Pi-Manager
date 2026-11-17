@@ -129,6 +129,19 @@ func TestNativeDesktop(t *testing.T) {
                 assert(checkVersions.disabled,"Version recheck allowed overlapping requests");
                 await wait(()=>!checkVersions.disabled);
                 assert(document.querySelector("[data-check-versions]")===checkVersions && document.querySelectorAll("#inspectDialog tbody tr").length===4,"Version recheck replaced the dialog or lost component information");
+                const previousVersions=hostHealth.get("1").versions;
+                const versionSnapshot=[...hostHealth].map(([id,health])=>({id,...health}));
+                const refreshed=versionSnapshot.find(host=>host.id==="1");
+                refreshed.versions={...previousVersions,checkedAt:previousVersions.checkedAt+3600,
+                    components:previousVersions.components.map(item=>({...item,local:item.latest,status:"current"}))};
+                const readHealth=window.nativeMonitor;
+                window.nativeMonitor=async()=>versionSnapshot;
+                try {
+                    document.dispatchEvent(new Event("visibilitychange"));
+                    await wait(()=>hostHealth.get("1").versions.checkedAt===refreshed.versions.checkedAt);
+                    assert(!versionHost.querySelector(".upgrade-indicator") && !document.querySelector("#inspectDialog .version-update"),"Scheduled version result did not refresh the badge and open dialog");
+                    assert(document.querySelector("#inspectDialog .count-note").textContent.includes(fmtDate(refreshed.versions.checkedAt)),"Open dialog still shows the previous check time");
+                } finally {window.nativeMonitor=readHealth;}
                 hostHealth.get("1").sampledAt++;renderPills();
                 assert(document.querySelector('[data-host-versions="1"]')===versionHost,"Health refresh replaced the hovered status badge");
                 document.querySelector("[data-inspect-close]").click();

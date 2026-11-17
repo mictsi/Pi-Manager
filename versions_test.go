@@ -110,12 +110,19 @@ func TestVersionStatus(t *testing.T) {
 }
 func TestVersionMonitoringAndCache(t *testing.T) {
 	var requests atomic.Int32
+	var upgraded atomic.Bool
 	a, _ := testApp(t, func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path == "/api/dns/blocking" {
+			if upgraded.Load() {
+				return jsonResponse(503, `{}`), nil
+			}
 			return jsonResponse(200, `{"blocking":"enabled"}`), nil
 		}
 		if r.URL.Path == "/api/info/version" {
 			requests.Add(1)
+			if upgraded.Load() {
+				return jsonResponse(200, `{"version":{"core":{"local":{"version":"v6.2"},"remote":{"version":"v6.2"}}}}`), nil
+			}
 			return jsonResponse(200, `{"version":{"core":{"local":{"version":"v6.1"},"remote":{"version":"v6.2"}},"ftl":{"local":{"version":"v6.2"},"remote":{"version":"v6.2"}},"web":{"local":{"version":"vDev"},"remote":{"version":null}},"docker":{"local":"2026.09.0","remote":"2026.10.0"}}}`), nil
 		}
 		return jsonResponse(404, `{}`), nil
@@ -148,9 +155,10 @@ func TestVersionMonitoringAndCache(t *testing.T) {
 	entry.expires = time.Now().Add(-time.Second)
 	m.versionCache["1\x00http://one.test/api"] = entry
 	m.versionMu.Unlock()
-	m.sampleHost("1")
-	if requests.Load() != 2 {
-		t.Fatal("expired version cache was not refreshed")
+	upgraded.Store(true)
+	h = m.sampleHost("1")
+	if requests.Load() != 2 || h.Versions == nil || h.Versions.Components[0].Status != "current" {
+		t.Fatal("failed health probe skipped the due version refresh", h.Versions)
 	}
 	cfg := a.config.Get()
 	cfg.Servers[0].URL = "http://replacement.test/api"
@@ -172,8 +180,8 @@ func TestVersionFailuresDoNotChangeReachability(t *testing.T) {
 		})
 		monitor := &HealthMonitor{app: a}
 		h := monitor.sampleHost("1")
-		if remaining := time.Until(monitor.versionCache["1\x00http://one.test/api"].expires); remaining < 59*time.Minute || remaining > time.Hour {
-			t.Fatal("failed version checks must also wait for the hourly refresh", remaining)
+		if remaining := time.Until(monitor.versionCache["1\x00http://one.test/api"].expires); remaining <= 0 || remaining > time.Minute {
+			t.Fatal("unavailable versions must retry after about a minute", remaining)
 		}
 		if !h.Reachable || h.Versions == nil || !h.Versions.Unavailable {
 			t.Fatal("optional version endpoint affected host status", h)

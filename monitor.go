@@ -58,8 +58,6 @@ func (m *HealthMonitor) Get() []HostHealth {
 	return result
 }
 func (m *HealthMonitor) sampleHost(id string) HostHealth {
-	ctx, cancel := context.WithTimeout(m.app.ctx, 8*time.Second)
-	defer cancel()
 	h := HostHealth{ID: id, SampledAt: time.Now().Unix(), revision: m.app.revision.Load()}
 	server, err := m.app.server(id)
 	if err != nil {
@@ -72,10 +70,25 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 	if loggedOut {
 		return h
 	}
+	h = m.sampleHealth(server, h)
+	// The version endpoint can work even when the blocking or metrics endpoints
+	// fail. Give it a separate deadline so a slow health probe cannot skip it.
+	if m.app.checkServer(id, server.URL, h.revision) == nil {
+		ctx, cancel := context.WithTimeout(m.app.ctx, 8*time.Second)
+		defer cancel()
+		h.Versions = m.versionsContext(ctx, id, server.URL, false)
+	}
+	return h
+}
+
+func (m *HealthMonitor) sampleHealth(server Server, h HostHealth) HostHealth {
+	id := server.ID
+	ctx, cancel := context.WithTimeout(m.app.ctx, 8*time.Second)
+	defer cancel()
 	var blocking struct {
 		Blocking string `json:"blocking"`
 	}
-	err = m.app.jsonAPIContext(ctx, id, "/dns/blocking", "GET", nil, &blocking)
+	err := m.app.jsonAPIContext(ctx, id, "/dns/blocking", "GET", nil, &blocking)
 	// A saved app password permits recovery from expired sessions in the background.
 	if err != nil {
 		s, e := m.app.server(id)
@@ -107,7 +120,6 @@ func (m *HealthMonitor) sampleHost(id string) HostHealth {
 	m.app.mu.Unlock()
 	h.Reachable = true
 	h.Blocking = blocking.Blocking
-	h.Versions = m.versionsContext(ctx, id, server.URL, false)
 	var system struct {
 		System struct {
 			CPU struct {

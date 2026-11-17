@@ -25,6 +25,12 @@ type versionSample struct {
 	expires  time.Time
 	revision uint64
 }
+
+const (
+	versionRefreshInterval = time.Hour
+	versionRetryInterval   = time.Minute
+)
+
 type versionEndpoint struct {
 	Version *struct {
 		Core   versionPair `json:"core"`
@@ -108,13 +114,14 @@ func (m *HealthMonitor) versionsContext(ctx context.Context, id, serverURL strin
 	}
 	info := &HostVersions{CheckedAt: now.Unix(), Components: []HostVersion{}}
 	var response versionEndpoint
-	ttl := time.Hour
+	ttl := versionRefreshInterval
 	current, serverErr := m.app.server(id)
 	if serverErr != nil || current.URL != serverURL {
 		return &HostVersions{CheckedAt: now.Unix(), Unavailable: true, Components: []HostVersion{}}
 	}
 	if m.app.jsonAPIContext(ctx, id, "/info/version", "GET", nil, &response) != nil || response.Version == nil {
 		info.Unavailable = true
+		ttl = versionRetryInterval
 	} else {
 		for _, item := range []struct {
 			name string

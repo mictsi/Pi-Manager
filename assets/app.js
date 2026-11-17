@@ -188,13 +188,17 @@ function serverVersionsHTML(server) {
 }
 function showServerVersions(server) {
     const view=showInspector(t("serverVersions",{server:server.label}),serverVersionsHTML(server),`<button class="sk-button btn primary" data-check-versions>${textHTML("checkVersionsAgain")}</button>`);
+    const body=$(".sk-dialog__body",view.dialog);
+    view.refresh=()=>{
+        if(serverById(server.id)===server)setHTML(body,serverVersionsHTML(server));
+        else view.close();
+    };
     $("[data-check-versions]",view.dialog).onclick=async event=>{
         const button=event.currentTarget;button.disabled=true;button.textContent=t("checkingVersions");
         try {
             const versions=await nativeCheckVersions(server.id,server.url,server.revision);
             if(serverById(server.id)!==server)return;
             hostHealth.set(server.id,{...hostHealth.get(server.id),versions});renderPills();
-            if(inspector===view)setHTML($(".sk-dialog__body",view.dialog),serverVersionsHTML(server));
         }catch(error){showError(error);}
         finally{button.disabled=false;button.textContent=t("checkVersionsAgain");}
     };
@@ -220,6 +224,7 @@ function renderPills() {
     }
     for(const button of existing.values())button.remove();
     pills.onclick=event=>{const button=event.target.closest("[data-host-versions]");if(button){const server=serverById(button.dataset.hostVersions);if(server)showServerVersions(server);}};
+    inspector?.refresh?.();
 }
 
 function renderShell() {
@@ -1605,6 +1610,7 @@ async function bootstrap() {
         try {hostHealth=new Map((await nativeMonitor()).map(h=>[h.id,h]));for(const s of state.servers){const h=hostHealth.get(s.id);if(h?.sampledAt && !s.checking)s.connected=h.authenticated;}renderPills();if (state.activeTab==="settings") state.page?.drawHealth?.();} catch { /* A closed native window ends polling. */ }
     };
     setInterval(()=>{if (!document.hidden) updateHealth();},2000);
+    document.addEventListener("visibilitychange",()=>{if(!document.hidden)updateHealth();});
     const saved=state.servers.filter(s=>s.url && s.password);
     const hash=decodeURIComponent(location.hash.slice(1));
     await switchTab(state.servers.every(s=>!s.url) ? "settings" : TAB_IDS.includes(hash) ? hash : "dashboard");

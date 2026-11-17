@@ -55,9 +55,12 @@ waiting for the next hourly check. Other hosts keep their existing check schedul
 
 ![Server version details showing available updates and Docker upgrade guidance](images/server-versions.png)
 
-Version checks use the server's [`/info/version` API](https://github.com/pi-hole/FTL/blob/master/src/api/docs/content/specs/info.yaml)
-and refresh hourly, including retries after an unavailable response. Pi-hole's own latest-release metadata may
-be missing or delayed. Custom builds, development branches and missing versions
+Pi-Manager reads each server's [`/info/version` API](https://github.com/pi-hole/FTL/blob/master/src/api/docs/content/specs/info.yaml)
+about once an hour while the app is running, including when minimized. The badge
+and any open version dialog show the latest result. If the endpoint is unavailable,
+Pi-Manager retries after about a minute. The **Checked** time is when Pi-Manager
+read the API. The latest-release values come from Pi-hole's own version cache,
+which Pi-hole normally refreshes daily. Custom builds, development branches and missing versions
 remain unknown; an unavailable version endpoint does not make a reachable
 server appear offline. Non-Docker installations show **Not running in Docker**.
 
